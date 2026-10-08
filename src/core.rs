@@ -108,6 +108,11 @@ impl Engine {
         &self.register_names
     }
 
+    /// Clear recent copies while retaining register contents and labels.
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+    }
+
     pub fn clear(&mut self) {
         self.registers.iter_mut().for_each(|entry| *entry = None);
         self.register_names.iter_mut().for_each(String::clear);
@@ -147,6 +152,20 @@ pub fn preview(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_history_preserves_registers_and_accepts_new_copies() {
+        let mut engine = Engine::default();
+        engine.edit_register('a', "Keep name", "Keep text").unwrap();
+        engine.observe("Recent copy");
+        engine.clear_history();
+        engine.clear_history();
+        assert!(engine.history().is_empty());
+        assert_eq!(engine.registers()[0].as_deref(), Some("Keep text"));
+        assert_eq!(engine.register_names()[0], "Keep name");
+        engine.observe("Next copy");
+        assert_eq!(engine.history(), &["Next copy"]);
+    }
 
     #[test]
     fn only_ascii_letters_are_registers_and_case_is_shared() {

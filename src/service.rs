@@ -33,6 +33,7 @@ pub enum Command {
         text: String,
     },
     ClearRegister(char),
+    ClearHistory,
     Clear,
 }
 #[derive(Debug)]
@@ -257,6 +258,10 @@ pub fn run(rx: Receiver<Command>, tx: Sender<Update>) {
                                 "Cleared register {}",
                                 register.to_ascii_lowercase()
                             )));
+                        }
+                        Command::ClearHistory => {
+                            engine.clear_history();
+                            let _ = tx.send(Update::Status("History cleared".into()));
                         }
                         Command::Clear => {
                             // Clear the OS first; failure must not report successful clear-all.

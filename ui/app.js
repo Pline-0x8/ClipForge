@@ -106,7 +106,7 @@
     element.addEventListener('dragstart',event=>{if((editor&&element.contains(editor.box))||getText()==null){event.preventDefault();return;}dragging=true;event.dataTransfer.setData('text/plain',getText());event.dataTransfer.effectAllowed='copy';});
     element.addEventListener('dragend',()=>{dragging=false;outsidePointer=false;refresh();});
   }
-  $('hide').onclick=()=>action('dismiss',{commit:false});$('clear').onclick=()=>action('clear_all');$('quit').onclick=()=>action('quit');
+  $('hide').onclick=()=>action('dismiss',{commit:false});$('clear-history').onclick=()=>action('clear_history');$('clear').onclick=()=>action('clear_all');$('quit').onclick=()=>action('quit');
   const settingsFields=['menu','copy','paste'];
   const modifiers=[['ctrl','Ctrl'],['alt','Alt'],['shift','Shift'],['super','Super']];
   const keyGroups=[['Special keys',['Space']],['Letters',Array.from({length:26},(_,i)=>String.fromCharCode(65+i))],['Numbers',Array.from({length:10},(_,i)=>String(i))],['Function keys',Array.from({length:24},(_,i)=>`F${i+1}`)]];

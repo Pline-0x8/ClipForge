@@ -20,14 +20,14 @@ The desktop tests temporarily replace clipboard text, and the keyboard fixture c
 
 ## Cleaning build output and caches
 
-Compiled output stays in the ignored `target` directory inside the repository. Cargo's standard release executable path is `target/release/clipforge.exe`; distribution copies belong in the ignored `release/bin/x64` folder. Downloaded dependencies stay in Cargo's user-wide cache (normally `$HOME/.cargo`). Tauri may generate a small ignored `gen` directory; the cleanup script removes it. Keep `Cargo.lock` for reproducible dependency versions.
+Compiled output stays in the ignored `target` directory inside the repository. Cargo's standard release executable path is `target/release/clipforge.exe`; distribution copies belong in the ignored `release/v<version>` folder (currently `release/v0.1.0-beta.1`). Keep only the executable and its `SHA256SUMS.txt` there. Release notes live in the tracked `docs/releases` directory. Downloaded dependencies stay in Cargo's user-wide cache (normally `$HOME/.cargo`). Tauri may generate a small ignored `gen` directory; the cleanup script removes it. Keep `Cargo.lock` for reproducible dependency versions.
 
 Development builds use line-table debug information and disable incremental compilation to reduce disk usage. Backtraces retain source locations; debugger variable inspection is limited, and recompiling edited code may take longer. These settings also apply to the inherited test profile; release settings are unchanged.
 
 ```powershell
 # Remove Cargo build output:
 cargo clean
-# Preview removal of project build output, old distributions, and generated schemas:
+# Preview removal of project build output and generated schemas:
 .\scripts\clean.ps1 -WhatIf
 # Remove those generated directories:
 .\scripts\clean.ps1
@@ -37,7 +37,7 @@ cargo clean
 
 If Windows disables script execution, run it with a process-only policy override: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -IncludeLocalCache`. Add `-WhatIf` to preview. This does not change the system execution policy.
 
-The script works from any directory and cleans generated directories inside this project. It preserves distribution copies in `release` and leaves the user-wide Cargo cache intact because other Rust projects share it. Before cleanup, copy release artifacts into `release/bin/x64`. The next build will recompile; deleting dependency caches also requires downloading them again. If you override `CARGO_TARGET_DIR`, use `cargo clean` to clean that location; the script only cleans the default project locations.
+The script works from any directory and cleans generated directories inside this project. It preserves distribution copies in `release` and leaves the user-wide Cargo cache intact because other Rust projects share it. Before cleanup, copy release artifacts into `release/v<version>` and generate a matching SHA-256 checksum. Avoid parallel distribution folders or temporary executable variants. The next build will recompile; deleting dependency caches also requires downloading them again. If you override `CARGO_TARGET_DIR`, use `cargo clean` to clean that location; the script only cleans the default project locations.
 
 Cargo 1.88 and later automatically evict unused user-wide cache entries. This does not clean project `target` directories. You can configure how often eviction runs in your user Cargo configuration:
 

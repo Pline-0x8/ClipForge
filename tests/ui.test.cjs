@@ -82,5 +82,9 @@ const setHotkey=(action,shortcut)=>{const parts=shortcut.split('+');for(const [i
  await $('settings').onclick();$('settings-defaults').onclick();assert.equal($('hotkey-menu-key').value,'Space');assert.equal($('hotkey-menu-preview').textContent,'Ctrl+Alt+Space');await $('settings-cancel').onclick();assert.equal(state.hotkeys.menu,'Ctrl+Alt+F11','cancel discards restored defaults');
  await $('settings').onclick();setHotkey('copy','Alt+Shift+F10');setHotkey('paste','Ctrl+Super+9');assert.equal($('hotkey-paste-preview').textContent,'Ctrl+Win / Command+9');await handlers['clipforge-toggle']();assert.equal(state.hotkeys.copy,'Alt+Shift+F10');assert.equal(state.hotkeys.paste,'Ctrl+Super+9');assert.equal(calls.at(-1).name,'dismiss');
  await cell().children[0].listeners.click();box().children[1].value='save before tray quit';await handlers['clipforge-quit']();assert.equal(calls.findLast(call=>call.name==='edit_register').args.text,'save before tray quit');assert.equal(calls.at(-1).name,'quit');
- console.log('PASS: inline edits, autosave, focus loss, validation retention, history, drag/drop, settings, tray quit');
+ await cell().children[0].listeners.click();box().children[1].value='save before clearing history';
+ await $('clear-history').onclick();assert.deepEqual(calls.slice(-3).map(call=>call.name),['edit_register','end_edit','clear_history']);
+ handlers['clipforge-state']({payload:{...state,history:[]}});assert.equal($('count').textContent,'0 items');assert.equal($('registers').children.length,26);
+ await $('clear').onclick();assert.equal(calls.at(-1).name,'clear_all');
+ console.log('PASS: inline edits, autosave, focus loss, validation retention, history, drag/drop, settings, tray quit, separate history clearing');
 })().catch(error=>{console.error(error);process.exitCode=1;});

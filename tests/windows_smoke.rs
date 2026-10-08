@@ -241,6 +241,51 @@ fn real_clipboard_register_ring_and_clear() {
 }
 
 #[test]
+#[ignore = "Temporarily changes the real Windows text clipboard"]
+fn clearing_history_preserves_registers_and_does_not_recapture_current_clipboard() {
+    let mut clipboard = arboard::Clipboard::new().unwrap();
+    let _restore = Restore(clipboard.get_text().ok());
+    let current = "ClipForge history clear: keep current clipboard";
+    clipboard.set_text(current).unwrap();
+    let (tx, commands) = mpsc::channel();
+    let (updates, rx) = mpsc::channel();
+    let worker = thread::spawn(move || service::run(commands, updates));
+    snapshot(&rx, |e| e.history().iter().any(|text| text == current));
+    tx.send(Command::EditRegister {
+        register: 'x',
+        name: "Keep label".into(),
+        text: "Keep register text".into(),
+    })
+    .unwrap();
+    snapshot(&rx, |e| e.register_names()[23] == "Keep label");
+    tx.send(Command::ClearHistory).unwrap();
+    snapshot(&rx, |e| {
+        e.history().is_empty()
+            && e.register_names()[23] == "Keep label"
+            && e.registers()[23].as_deref() == Some("Keep register text")
+    });
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        if let Ok(Update::Snapshot(engine)) = rx.recv_timeout(Duration::from_millis(30)) {
+            assert!(
+                engine.history().is_empty(),
+                "Current clipboard was recaptured"
+            );
+        }
+    }
+    assert_eq!(clipboard.get_text().unwrap(), current);
+    clipboard
+        .set_text("ClipForge history clear: next copy")
+        .unwrap();
+    snapshot(&rx, |e| {
+        e.history() == ["ClipForge history clear: next copy"]
+            && e.register_names()[23] == "Keep label"
+    });
+    drop(tx);
+    worker.join().unwrap();
+}
+
+#[test]
 #[ignore = "Reads the real Windows clipboard; verifies errors never request a popup"]
 fn empty_or_invalid_register_paste_reports_status_without_show() {
     let (tx, commands) = mpsc::channel();
