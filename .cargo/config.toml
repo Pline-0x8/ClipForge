@@ -1,0 +1,8 @@
+# Keep compiled artifacts outside the source checkout.
+[build]
+target-dir = "../.clipforge-build"
+
+# Reduce development disk usage while retaining source locations in backtraces.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false

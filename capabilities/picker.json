@@ -1,0 +1,6 @@
+{
+  "identifier": "picker",
+  "description": "Local picker may receive clipboard state events.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}
