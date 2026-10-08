@@ -3,14 +3,15 @@ class Element{
  constructor(){this.children=[];this.listeners={};this.dataset={};this.open=false;this.classList={add(){},remove(){},toggle(){}};}
  append(...nodes){this.children.push(...nodes);} prepend(...nodes){this.children.unshift(...nodes);} replaceChildren(...nodes){this.children=nodes;} setAttribute(){} focus(){} showModal(){this.open=true;} close(){this.open=false;} addEventListener(name,handler){this.listeners[name]=handler;} contains(node){return this===node||this.children.some(child=>child.contains(node));}
 }
-const elements=new Map(),calls=[],handlers={},events={};let heldEdit=null;
+const elements=new Map(),calls=[],handlers={},events={};let heldEdit=null,heldSettings=null;
 let state={registers:['one\r\ntwo\n世界',...Array(25).fill(null)],registerNames:['Named',...Array(25).fill('')],history:['history\n世界\nfull'],currentClipboard:'current',selection:null,copy:false,status:'Ready'};
 const document={getElementById(id){if(!elements.has(id))elements.set(id,new Element());return elements.get(id);},createElement(){return new Element();},querySelectorAll(){return[];},addEventListener(name,fn){events[name]=fn;}};
-const window={__TAURI__:{core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='edit_register'&&heldEdit)return heldEdit;return state;}},event:{listen:async(name,fn)=>{handlers[name]=fn;}}}};
+const window={__TAURI__:{core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='edit_register'&&heldEdit)return heldEdit;if(name==='save_hotkeys'){if(heldSettings)return heldSettings;state.hotkeys=args.hotkeys;return args.hotkeys;}return state;}},event:{listen:async(name,fn)=>{handlers[name]=fn;}}}};
 vm.runInNewContext(fs.readFileSync(__dirname+'/../ui/app.js','utf8'),{document,window,TextEncoder,setTimeout});
 const $=id=>elements.get(id),tick=()=>new Promise(resolve=>setImmediate(resolve));
 const row=()=>$('registers').children[0],cell=()=>row().children[0],box=()=>cell().children[0];
 const outside=()=>{events.pointerdown({target:new Element()});events.click();};
+const setHotkey=(action,shortcut)=>{const parts=shortcut.split('+');for(const [id,token] of [['ctrl','Ctrl'],['alt','Alt'],['shift','Shift'],['super','Super']])$(`hotkey-${action}-${id}`).checked=parts.includes(token);$(`hotkey-${action}-key`).value=parts.at(-1);$(`hotkey-${action}-key`).listeners.change();};
 (async()=>{await tick();
  const source=$('history').children[0],data={types:['text/plain'],setData(type,text){this.text=text;},getData(){return this.text;}};
  source.listeners.dragstart({dataTransfer:data});assert.equal(data.text,state.history[0]);
@@ -61,5 +62,25 @@ const outside=()=>{events.pointerdown({target:new Element()});events.click();};
  await cell().children[0].listeners.click();box().children[0].value='x'.repeat(81);const blurDismissCount=calls.filter(call=>call.name==='dismiss_on_blur').length;
  await handlers['clipforge-blur']();assert.equal(calls.filter(call=>call.name==='dismiss_on_blur').length,blurDismissCount,'outside dismissal preserves invalid edits');handlers['clipforge-cancel-edit']();
  await $('save-current').onclick();await handlers['clipforge-blur']();assert.equal($('save-dialog').open,false,'outside click closes the register-letter chooser');assert.equal(calls.at(-1).name,'dismiss_on_blur');
- console.log('PASS: inline edits, autosave, outside dismissal, validation retention, history, line endings, clear, fulltext drag');
+ await cell().children[0].listeners.click();box().children[1].value='save before settings';
+ await $('settings').onclick();assert.equal($('settings-dialog').open,true);assert.equal(calls.findLast(call=>call.name==='edit_register').args.text,'save before settings');
+ assert.equal($('hotkey-menu-key').value,'Space');assert.equal($('hotkey-menu-ctrl').checked,true);assert.equal($('hotkey-menu-alt').checked,true);assert.equal($('hotkey-menu-preview').textContent,'Ctrl+Alt+Space');
+ assert.equal($('hotkey-menu-key').children[0].children[0].textContent,'Spacebar (Space)','Space has an explicit dropdown label');
+ const settingsCalls=calls.filter(call=>call.name==='save_hotkeys').length;
+ setHotkey('menu','Shift+Space');await $('settings-form').onsubmit({preventDefault(){}});assert.equal($('settings-dialog').open,true);assert.ok($('settings-error').textContent.includes('select Ctrl'));assert.equal(calls.filter(call=>call.name==='save_hotkeys').length,settingsCalls);
+ setHotkey('menu','Ctrl+Alt+ ');await $('settings-form').onsubmit({preventDefault(){}});assert.ok($('settings-error').textContent.includes('dropdown'));assert.equal(calls.filter(call=>call.name==='save_hotkeys').length,settingsCalls,'literal whitespace cannot become an activation key');
+ setHotkey('menu','Ctrl+Shift+F12');assert.equal($('hotkey-menu-preview').textContent,'Ctrl+Shift+F12');
+ await $('settings-form').onsubmit({preventDefault(){}});assert.equal($('settings-dialog').open,false);assert.equal($('menu-shortcut').textContent,'Ctrl+Shift+F12');assert.equal(calls.at(-1).name,'end_edit');
+ await $('settings').onclick();setHotkey('menu','Ctrl+Alt+F11');
+ let rejectSettings;heldSettings=new Promise((resolve,reject)=>{rejectSettings=reject;});
+ const hideCount=calls.filter(call=>call.name==='dismiss_on_blur').length;
+ const blur=handlers['clipforge-blur']();await tick();assert.equal($('settings-submit').disabled,true);assert.equal($('hotkey-menu-key').disabled,true);assert.equal($('hotkey-menu-ctrl').disabled,true);
+ await $('settings-cancel').onclick();assert.equal($('settings-dialog').open,true,'pending save cannot be cancelled');
+ rejectSettings(new Error('Shortcut already owned'));await blur;heldSettings=null;
+ assert.equal($('settings-dialog').open,true);assert.equal($('hotkey-menu-key').value,'F11');assert.equal($('settings-submit').disabled,false);assert.equal($('hotkey-menu-key').disabled,false);assert.ok($('settings-error').textContent.includes('owned'));assert.equal(calls.filter(call=>call.name==='dismiss_on_blur').length,hideCount,'settings error prevents hiding');
+ await $('settings-form').onsubmit({preventDefault(){}});assert.equal($('settings-dialog').open,false);
+ await $('settings').onclick();$('settings-defaults').onclick();assert.equal($('hotkey-menu-key').value,'Space');assert.equal($('hotkey-menu-preview').textContent,'Ctrl+Alt+Space');await $('settings-cancel').onclick();assert.equal(state.hotkeys.menu,'Ctrl+Alt+F11','cancel discards restored defaults');
+ await $('settings').onclick();setHotkey('copy','Alt+Shift+F10');setHotkey('paste','Ctrl+Super+9');assert.equal($('hotkey-paste-preview').textContent,'Ctrl+Win / Command+9');await handlers['clipforge-toggle']();assert.equal(state.hotkeys.copy,'Alt+Shift+F10');assert.equal(state.hotkeys.paste,'Ctrl+Super+9');assert.equal(calls.at(-1).name,'dismiss');
+ await cell().children[0].listeners.click();box().children[1].value='save before tray quit';await handlers['clipforge-quit']();assert.equal(calls.findLast(call=>call.name==='edit_register').args.text,'save before tray quit');assert.equal(calls.at(-1).name,'quit');
+ console.log('PASS: inline edits, autosave, focus loss, validation retention, history, drag/drop, settings, tray quit');
 })().catch(error=>{console.error(error);process.exitCode=1;});

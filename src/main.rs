@@ -3,6 +3,7 @@ use clipforge::{
     picker::{Picker, Snapshot},
     platform,
     service::{self, Command, Update},
+    settings::{self, Hotkeys},
 };
 use std::{
     sync::{
@@ -19,6 +20,8 @@ fn smoke_report(message: &str) {
 }
 
 struct Runtime {
+    settings_path: Mutex<Option<std::path::PathBuf>>,
+    settings_update: Mutex<()>,
     picker: Mutex<Picker>,
     tx: Sender<Command>,
     smoke: bool,
@@ -294,6 +297,99 @@ fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+async fn save_hotkeys(app: tauri::AppHandle, hotkeys: Hotkeys) -> Result<Hotkeys, String> {
+    let hotkeys = hotkeys.normalized()?;
+    #[cfg(not(windows))]
+    let handle = app.clone();
+    let configure = move || -> Result<Hotkeys, String> {
+        let state = app.state::<Runtime>();
+        let _guard = state.settings_update.lock().map_err(|e| e.to_string())?;
+        let path = state
+            .settings_path
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone()
+            .ok_or("Hotkey settings are unavailable in smoke mode")?;
+        platform::configure(&hotkeys, &path)?;
+        {
+            let mut picker = state.lock();
+            picker.hotkeys = hotkeys.clone();
+            picker.status = "Hotkeys saved".into();
+        }
+        publish(&app);
+        Ok(hotkeys)
+    };
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(configure)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let (reply, result) = mpsc::channel();
+        handle
+            .run_on_main_thread(move || {
+                let _ = reply.send(configure());
+            })
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || result.recv().map_err(|e| e.to_string())?)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+}
+
+fn open_from_tray(app: &tauri::AppHandle) {
+    if app.state::<Runtime>().lock().visible {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    } else {
+        show(app, false, platform::target());
+    }
+}
+fn create_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::{
+        menu::{Menu, MenuItem},
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    };
+    let open = MenuItem::with_id(app, "open", "Open ClipForge", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    TrayIconBuilder::with_id("clipforge")
+        .icon(tauri::include_image!("icons/icon.png"))
+        .tooltip("ClipForge — clipboard registers and history")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                open_from_tray(tray.app_handle());
+            }
+        })
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => open_from_tray(app),
+            "quit" => {
+                if app.state::<Runtime>().lock().pinned {
+                    let _ = app.emit("clipforge-quit", ());
+                } else {
+                    app.exit(0);
+                }
+            }
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
 fn main() {
     let smoke_background = std::env::args().any(|arg| arg == "--smoke-background");
     let smoke_ui = smoke_background || std::env::args().any(|arg| arg == "--smoke-ui");
@@ -322,14 +418,8 @@ fn main() {
     let (updates, raw_updates) = mpsc::channel();
     let (events_tx, events_rx) = mpsc::channel();
     let target = platform::target();
-    let startup = if smoke_ui {
-        Ok(())
-    } else {
-        platform::start(events_tx)
-    };
-    let initially_visible = (smoke_ui && !smoke_background) || manual || startup.is_err();
+    let initially_visible = (smoke_ui && !smoke_background) || manual;
     let mut picker = Picker::new(target);
-    picker.status = startup.err().unwrap_or_default();
     if smoke_ui {
         picker.current_clipboard =
             Some("A recent clipboard entry\nDrag here or edit to change the host clipboard".into());
@@ -377,6 +467,8 @@ fn main() {
         std::thread::spawn(move || service::run(commands, updates));
     }
     let runtime = Runtime {
+        settings_path: Mutex::new(None),
+        settings_update: Mutex::new(()),
         picker: Mutex::new(picker),
         tx,
         smoke: smoke_ui,
@@ -399,6 +491,7 @@ fn main() {
             dismiss,
             dismiss_on_blur,
             clear_all,
+            save_hotkeys,
             quit
         ])
         .setup(move |app| {
@@ -418,7 +511,40 @@ fn main() {
             }
             builder.build()?;
 
+            let mut startup_error = false;
+            if !smoke_ui {
+                let path = app.path().app_config_dir()?.join("hotkeys.json");
+                let state = app.state::<Runtime>();
+                let hotkeys = match settings::load(&path) {
+                    Ok(keys) => keys,
+                    Err(error) => {
+                        state.lock().status = error;
+                        startup_error = true;
+                        Hotkeys::default()
+                    }
+                };
+                state.lock().hotkeys = hotkeys.clone();
+                *state.settings_path.lock().unwrap() = Some(path);
+                if let Err(error) = platform::start(events_tx, &hotkeys) {
+                    let mut picker = state.lock();
+                    if !picker.status.is_empty() {
+                        picker.status.push_str("; ");
+                    }
+                    picker.status.push_str(&error);
+                    startup_error = true;
+                }
+                if let Err(error) = create_tray(app) {
+                    state.lock().status = format!("Could not create ClipForge tray icon: {error}");
+                    startup_error = true;
+                }
+            }
+
             if smoke_ui {
+                create_tray(app)?;
+                if app.tray_by_id("clipforge").is_none() {
+                    return Err("ClipForge tray icon was not retained".into());
+                }
+                smoke_report("PASS: ClipForge tray icon and menu created");
                 smoke_report("PASS: Tauri webview created");
             }
             let handle = app.handle().clone();
@@ -433,7 +559,7 @@ fn main() {
                     }
                 }
             });
-            if initially_visible {
+            if initially_visible || startup_error {
                 show(app.handle(), false, target);
             }
             if smoke_ui {
@@ -480,7 +606,12 @@ fn main() {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = hide(window.app_handle(), false);
+                    let app = window.app_handle();
+                    if app.state::<Runtime>().lock().pinned {
+                        let _ = app.emit("clipforge-toggle", ());
+                    } else {
+                        let _ = hide(app, false);
+                    }
                 }
                 tauri::WindowEvent::Focused(false) => {
                     let app = window.app_handle();

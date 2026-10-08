@@ -1,10 +1,14 @@
 //! Platform independent shortcut state machine. Feed physical events only.
+use crate::settings::{ALT, CTRL, Hotkeys, Shortcut};
 use std::time::{Duration, Instant};
 
 const PREFIX: Duration = Duration::from_secs(2);
+#[cfg(test)]
 const C: u16 = 0x43;
+#[cfg(test)]
 const V: u16 = 0x56;
 const ESC: u16 = 0x1b;
+#[cfg(test)]
 const SPACE: u16 = 0x20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +30,7 @@ struct Pending {
     target: usize,
     started: Instant,
     released: bool,
+    key: u16,
 }
 
 #[derive(Debug)]
@@ -33,6 +38,7 @@ pub struct Input {
     pending: Option<Pending>,
     // Keep swallowed downs paired with swallowed ups even after cancellation.
     swallowed: [bool; 256],
+    shortcuts: [Shortcut; 3],
 }
 
 impl Default for Input {
@@ -40,11 +46,26 @@ impl Default for Input {
         Self {
             pending: None,
             swallowed: [false; 256],
+            shortcuts: Hotkeys::default().parsed().unwrap(),
         }
     }
 }
 
 impl Input {
+    #[cfg(windows)]
+    pub(crate) fn is_swallowed(&self, key: u16) -> bool {
+        self.swallowed
+            .get(usize::from(key))
+            .copied()
+            .unwrap_or(false)
+    }
+    pub fn configure(&mut self, shortcuts: [Shortcut; 3]) {
+        self.cancel_prefix();
+        self.shortcuts = shortcuts;
+    }
+    pub fn menu_matches(&self, key: u16, modifiers: u32) -> bool {
+        self.shortcuts[0] == Shortcut { key, modifiers }
+    }
     pub fn cancel_prefix(&mut self) {
         self.pending = None;
     }
@@ -66,6 +87,22 @@ impl Input {
         now: Instant,
         target: usize,
     ) -> Decision {
+        self.handle_modifiers(
+            key,
+            down,
+            (u32::from(ctrl) * CTRL) | (u32::from(alt) * ALT),
+            now,
+            target,
+        )
+    }
+    pub fn handle_modifiers(
+        &mut self,
+        key: u16,
+        down: bool,
+        modifiers: u32,
+        now: Instant,
+        target: usize,
+    ) -> Decision {
         let index = usize::from(key);
         if index >= self.swallowed.len() {
             return Decision::default();
@@ -77,7 +114,7 @@ impl Input {
         };
         if !down {
             if let Some(p) = self.pending.as_mut()
-                && key == if p.copy { C } else { V }
+                && key == p.key
             {
                 p.released = true;
             }
@@ -93,7 +130,7 @@ impl Input {
             };
         }
         self.tick(now);
-        if ctrl && alt && key == SPACE {
+        if self.menu_matches(key, modifiers) {
             self.pending = None;
             self.swallowed[index] = true;
             return Decision {
@@ -136,12 +173,14 @@ impl Input {
             }
             self.pending = None;
         }
-        if ctrl && alt && matches!(key, C | V) {
+        let shortcut = Shortcut { key, modifiers };
+        if self.shortcuts[1..].contains(&shortcut) {
             self.pending = Some(Pending {
-                copy: key == C,
+                copy: shortcut == self.shortcuts[1],
                 target,
                 started: now,
                 released: false,
+                key,
             });
             self.swallowed[index] = true;
             return Decision {
@@ -156,6 +195,54 @@ impl Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn configured_prefixes_require_exact_modifiers_and_preserve_paired_releases() {
+        let keys = Hotkeys {
+            menu: "Ctrl+Shift+F10".into(),
+            copy: "Alt+Shift+F11".into(),
+            paste: "Ctrl+Super+9".into(),
+        };
+        let mut input = Input::default();
+        input.configure(keys.parsed().unwrap());
+        let t = Instant::now();
+        assert_eq!(
+            input.handle_modifiers(0x7a, true, ALT, t, 7),
+            Decision::default()
+        );
+        assert!(
+            input
+                .handle_modifiers(0x7a, true, ALT | crate::settings::SHIFT, t, 7)
+                .suppress
+        );
+        assert!(input.handle_modifiers(0x7a, false, 0, t, 7).suppress);
+        assert_eq!(
+            input.handle_modifiers(0x58, true, 0, t, 9).action,
+            Some(Action::Copy {
+                register: 'x',
+                target: 7
+            })
+        );
+        input.configure(Hotkeys::default().parsed().unwrap());
+        assert!(
+            input.handle_modifiers(0x58, false, 0, t, 9).suppress,
+            "Reconfiguration must preserve swallowed key-up pairs"
+        );
+        assert_eq!(
+            input.handle_modifiers(0x59, true, 0, t, 9),
+            Decision::default()
+        );
+        input.configure(keys.parsed().unwrap());
+        let mods = CTRL | crate::settings::SUPER;
+        input.handle_modifiers(0x39, true, mods, t, 42);
+        input.handle_modifiers(0x39, false, 0, t, 42);
+        assert_eq!(
+            input.handle_modifiers(0x41, true, 0, t, 9).action,
+            Some(Action::Paste {
+                register: 'a',
+                target: 42
+            })
+        );
+    }
     #[test]
     fn copy_and_paste_prefixes_never_open_a_menu() {
         for key in [C, V] {

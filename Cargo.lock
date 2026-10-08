@@ -363,6 +363,7 @@ dependencies = [
  "enigo",
  "global-hotkey",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "windows-sys 0.61.2",

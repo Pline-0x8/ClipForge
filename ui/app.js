@@ -3,6 +3,8 @@
   const {invoke}=window.__TAURI__.core, {listen}=window.__TAURI__.event;
   const $=id=>document.getElementById(id);
   let state=null,lastContent='',lastSelection=null,dragging=false,pending=null,editor=null,saving=null,opening=null,outsidePointer=false;
+  const defaults={menu:'Ctrl+Alt+Space',copy:'Ctrl+Alt+C',paste:'Ctrl+Alt+V'};
+  let settingsSaving=null,settingsOriginal=null;
   async function command(name,args={}) {try{return await invoke(name,args);}catch(error){$('status').textContent=String(error);}}
   const summary=text=>text.split(/\r?\n/).slice(0,2).map(line=>Array.from(line).slice(0,140).join('')).join('\n')||'(Empty text)';
   function refresh(){if(outsidePointer)return;if(pending&&!editor&&!dragging){const next=pending;pending=null;lastContent='';render(next);}else if(state&&!editor&&!dragging){lastContent='';render(state);}}
@@ -27,7 +29,7 @@
     })();
     try{return await saving;}finally{saving=null;}
   }
-  async function action(name,args={}){if(await saveEditor())return command(name,args);}
+  async function action(name,args={}){if(await saveEditor()&&await saveSettings())return command(name,args);}
   async function openEditor(register,host){
     if(editor?.register===register)return;
     if(!(await saveEditor()))return;
@@ -65,6 +67,7 @@
   function render(snapshot){
     state=snapshot;
     $('status').textContent=snapshot.status||'Ready';
+    $('menu-shortcut').textContent=snapshot.hotkeys?.menu||defaults.menu;
     $('mode').textContent=snapshot.copy?'Choose a register to save into':'Choose clipboard text';
     $('hint').textContent=snapshot.copy?'Press a letter to save the copied selection.':'Click a cell to edit. Click elsewhere to save. Drag history to a cell.';
     if(editor||dragging||opening||outsidePointer){pending=snapshot;return;}
@@ -104,6 +107,63 @@
     element.addEventListener('dragend',()=>{dragging=false;outsidePointer=false;refresh();});
   }
   $('hide').onclick=()=>action('dismiss',{commit:false});$('clear').onclick=()=>action('clear_all');$('quit').onclick=()=>action('quit');
+  const settingsFields=['menu','copy','paste'];
+  const modifiers=[['ctrl','Ctrl'],['alt','Alt'],['shift','Shift'],['super','Super']];
+  const keyGroups=[['Special keys',['Space']],['Letters',Array.from({length:26},(_,i)=>String.fromCharCode(65+i))],['Numbers',Array.from({length:10},(_,i)=>String(i))],['Function keys',Array.from({length:24},(_,i)=>`F${i+1}`)]];
+  const allowedKeys=new Set(keyGroups.flatMap(([,keys])=>keys));
+  function shortcutValue(action){return [...modifiers.filter(([id])=>$(`hotkey-${action}-${id}`).checked).map(([,token])=>token),$(`hotkey-${action}-key`).value].join('+');}
+  function previewShortcut(action){$('hotkey-'+action+'-preview').textContent=shortcutValue(action).replace('Super','Win / Command');}
+  settingsFields.forEach(action=>{
+    const select=$(`hotkey-${action}-key`);
+    keyGroups.forEach(([label,keys])=>{
+      const group=document.createElement('optgroup');group.label=label;
+      keys.forEach(key=>{const option=document.createElement('option');option.value=key;option.textContent=key==='Space'?'Spacebar (Space)':key;group.append(option);});select.append(group);
+    });
+    select.addEventListener('change',()=>previewShortcut(action));
+    modifiers.forEach(([id])=>$(`hotkey-${action}-${id}`).addEventListener('change',()=>previewShortcut(action)));
+  });
+  function fillSettings(hotkeys){settingsFields.forEach(action=>{
+    const parts=hotkeys[action].split('+');
+    modifiers.forEach(([id,token])=>{$(`hotkey-${action}-${id}`).checked=parts.includes(token);});
+    $(`hotkey-${action}-key`).value=parts.at(-1);previewShortcut(action);
+  });}
+  function settingsBusy(busy){[...settingsFields.flatMap(action=>[`hotkey-${action}-key`,...modifiers.map(([id])=>`hotkey-${action}-${id}`)]),'settings-submit','settings-defaults','settings-cancel'].forEach(id=>{$(id).disabled=busy;});}
+  async function closeSettings(){if(settingsSaving)return;$('settings-dialog').close();await command('end_edit');}
+  async function saveSettings(force=false){
+    if(settingsSaving)return settingsSaving;
+    if(!$('settings-dialog').open)return true;
+    for(const action of settingsFields){
+      if(!['ctrl','alt','super'].some(id=>$(`hotkey-${action}-${id}`).checked)){
+        $('settings-error').textContent=`${{menu:'Picker',copy:'Register copy',paste:'Register paste'}[action]}: select Ctrl, Alt or Win / Command.`;return false;
+      }
+      if(!allowedKeys.has($(`hotkey-${action}-key`).value)){$('settings-error').textContent='Choose a key from the dropdown.';return false;}
+    }
+    const hotkeys=Object.fromEntries(settingsFields.map(action=>[action,shortcutValue(action)]));
+    if(!force&&settingsFields.every(key=>hotkeys[key]===settingsOriginal[key])){await closeSettings();return true;}
+    settingsSaving=(async()=>{
+      settingsBusy(true);$('settings-error').textContent='';
+      try{
+        const saved=await invoke('save_hotkeys',{hotkeys});
+        if(state)state.hotkeys=saved;
+        $('menu-shortcut').textContent=saved.menu;
+        $('settings-dialog').close();await command('end_edit');return true;
+      }catch(error){$('settings-error').textContent=String(error);return false;}
+      finally{settingsBusy(false);}
+    })();
+    try{return await settingsSaving;}finally{settingsSaving=null;}
+  }
+  $('settings').onclick=async()=>{
+    if(!(await saveEditor()))return;
+    try{
+      await invoke('begin_edit');
+      settingsOriginal={...(state?.hotkeys||defaults)};fillSettings(settingsOriginal);
+      $('settings-error').textContent='';$('settings-dialog').showModal();$('hotkey-menu-key').focus();
+    }catch(error){$('status').textContent=String(error);await command('end_edit');}
+  };
+  $('settings-defaults').onclick=()=>fillSettings(defaults);
+  $('settings-cancel').onclick=closeSettings;
+  $('settings-dialog').addEventListener('cancel',event=>{event.preventDefault();return closeSettings();});
+  $('settings-form').onsubmit=event=>{event.preventDefault();return saveSettings(true);};
   $('current-clipboard').addEventListener('click',event=>{if(editor?.register===null&&editor.box.contains(event.target))return;return openEditor(null,$('current-preview'));});
   dropTarget($('current-clipboard'),text=>action('set_clipboard',{text}));dragSource($('current-clipboard'),()=>state?.currentClipboard);
   document.addEventListener('pointerdown',event=>{if(editor&&!editor.box.contains(event.target)){outsidePointer=true;saveEditor();}});
@@ -113,10 +173,10 @@
   function cancelSave(){ $('save-dialog').close();command('end_edit'); }
   $('cancel-save').onclick=cancelSave;$('save-dialog').addEventListener('cancel',event=>{event.preventDefault();cancelSave();});
   $('save-form').onsubmit=async event=>{event.preventDefault();const register=$('save-letter').value.toLowerCase();if(/^[a-z]$/.test(register)){try{await invoke('save_current',{register});cancelSave();}catch(error){$('save-error').textContent=String(error);}}};
-  function cancelEdit(){if(saving)return;if(editor){finishEditor();}else if($('save-dialog').open)cancelSave();}
+  function cancelEdit(){if(saving)return;if(editor){finishEditor();}else if($('settings-dialog').open)closeSettings();else if($('save-dialog').open)cancelSave();}
   document.addEventListener('keydown',event=>{
     if(editor){if(event.key==='Escape'){event.preventDefault();cancelEdit();}return;}
-    if($('save-dialog').open||event.target.matches('input,textarea'))return;
+    if($('settings-dialog').open||$('save-dialog').open||event.target.matches('input,textarea'))return;
     if(event.key==='Escape'){event.preventDefault();command('dismiss',{commit:false});}
     else if(event.key==='Enter'){event.preventDefault();action('dismiss',{commit:true});}
     else if(['Tab','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();command('navigate',{backwards:event.shiftKey||['ArrowUp','ArrowLeft'].includes(event.key)});}
@@ -125,5 +185,6 @@
   listen('clipforge-toggle',()=>{if($('save-dialog').open)cancelSave();return action('dismiss',{commit:false});}).catch(error=>{$('status').textContent=String(error);});
   listen('clipforge-blur',()=>{if($('save-dialog').open)cancelSave();return action('dismiss_on_blur');}).catch(error=>{$('status').textContent=String(error);});
   listen('clipforge-cancel-edit',cancelEdit).catch(error=>{$('status').textContent=String(error);});
+  listen('clipforge-quit',()=>action('quit')).catch(error=>{$('status').textContent=String(error);});
   listen('clipforge-state',event=>render(event.payload)).then(()=>invoke('snapshot')).then(render).catch(error=>{$('status').textContent=String(error);});
 })();

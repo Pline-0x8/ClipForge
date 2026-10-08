@@ -5,12 +5,16 @@ Generated with the built-in imagegen tool on October 8, 2026. The master is
 
 Final prompt:
 
-> Use case: logo-brand. Create a polished square desktop app icon for ClipForge,
-> a clipboard manager with named snippet registers. A bold, simple clipboard
-> silhouette combined with a small forge spark, strong readable geometry at tray
-> icon scale, dark charcoal and luminous mint green matching a dark productivity
-> app. Centered rounded-square icon tile, generous clean margin, crisp edges,
-> subtle depth, no letters, no words, no watermark. One icon only.
+> Use case: logo-brand. Design an original distinctive desktop app icon for
+> ClipForge, a clipboard snippet manager. One single sculptural continuous folded
+> mint ribbon forming an angular open C, with a clever interlocking inner fold
+> suggesting a paper clip and stacked snippets through negative space. Geometric
+> custom brand mark, sophisticated precise silhouette, bold enough at 16 pixels,
+> front view, centered within a dark midnight navy rounded-square tile. Restrained
+> two-tone mint and jade, crisp near-flat edges with very subtle dimensional
+> shading. No clipboard pictogram, no anvil, no spark, no emoji, no text, no letters
+> printed, no objects combined, no decorative glow, no mockup, no watermark.
+> Square composition, the mark occupies 70 percent of tile.
 
 `scripts/build-icons.ps1` resizes the master into a 128 px tray PNG, a 256 px
 README PNG, and a Windows ICO with 16, 24, 32, 48, 64, 128, and 256 px frames.

@@ -5,6 +5,7 @@ use serde::Serialize;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    pub hotkeys: crate::settings::Hotkeys,
     pub registers: Vec<Option<String>>,
     pub register_names: Vec<String>,
     pub current_clipboard: Option<String>,
@@ -16,6 +17,7 @@ pub struct Snapshot {
 }
 
 pub struct Picker {
+    pub hotkeys: crate::settings::Hotkeys,
     pub engine: Engine,
     pub current_clipboard: Option<String>,
     pub status: String,
@@ -29,6 +31,7 @@ pub struct Picker {
 impl Picker {
     pub fn new(target: usize) -> Self {
         Self {
+            hotkeys: crate::settings::Hotkeys::default(),
             engine: Engine::default(),
             current_clipboard: None,
             status: String::new(),
@@ -42,6 +45,7 @@ impl Picker {
     }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
+            hotkeys: self.hotkeys.clone(),
             registers: self.engine.registers().to_vec(),
             register_names: self.engine.register_names().to_vec(),
             current_clipboard: self.current_clipboard.clone(),

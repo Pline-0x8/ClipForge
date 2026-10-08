@@ -1,34 +1,112 @@
 //! macOS and X11 use a focused register chooser rather than swallowing arbitrary
 //! global letter keys. Wayland deliberately exposes only the manual chooser.
 use super::Event;
+use crate::settings::{self, Hotkeys, Shortcut};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
     hotkey::{Code, HotKey, Modifiers},
 };
-use std::sync::mpsc::Sender;
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex, mpsc::Sender},
+};
 
-pub fn start_backend(tx: Sender<Event>) -> Result<(), String> {
+struct Backend {
+    manager: GlobalHotKeyManager,
+    active: Vec<(Shortcut, HotKey)>,
+    ids: Arc<Mutex<Vec<u32>>>,
+}
+thread_local! { static BACKEND: RefCell<Option<Backend>> = const { RefCell::new(None) }; }
+
+fn native(shortcut: Shortcut) -> Result<HotKey, String> {
+    let mut modifiers = Modifiers::empty();
+    for (flag, modifier) in [
+        (settings::CTRL, Modifiers::CONTROL),
+        (settings::ALT, Modifiers::ALT),
+        (settings::SHIFT, Modifiers::SHIFT),
+        (settings::SUPER, Modifiers::SUPER),
+    ] {
+        if shortcut.modifiers & flag != 0 {
+            modifiers |= modifier;
+        }
+    }
+    let code = match shortcut.key {
+        0x20 => "Space".into(),
+        0x30..=0x39 => format!("Digit{}", char::from_u32(u32::from(shortcut.key)).unwrap()),
+        0x41..=0x5a => format!("Key{}", char::from_u32(u32::from(shortcut.key)).unwrap()),
+        _ => format!("F{}", shortcut.key - 0x70 + 1),
+    }
+    .parse::<Code>()
+    .map_err(|e| e.to_string())?;
+    Ok(HotKey::new(Some(modifiers), code))
+}
+impl Backend {
+    fn apply(&mut self, hotkeys: &Hotkeys, path: Option<&std::path::Path>) -> Result<(), String> {
+        let mut staged = Vec::new();
+        for (index, shortcut) in hotkeys.parsed()?.into_iter().enumerate() {
+            if let Some(existing) = self.active.iter().find(|(key, _)| *key == shortcut) {
+                staged.push(*existing);
+                continue;
+            }
+            let key = native(shortcut)?;
+            if let Err(error) = self.manager.register(key) {
+                self.retire(&staged, &self.active);
+                return Err(format!(
+                    "{} shortcut {} is unavailable: {error}. Another application or the desktop may own it.",
+                    ["Menu", "Register copy", "Register paste"][index],
+                    shortcut.label()
+                ));
+            }
+            staged.push((shortcut, key));
+        }
+        if let Some(path) = path
+            && let Err(error) = settings::save(path, hotkeys)
+        {
+            self.retire(&staged, &self.active);
+            return Err(error);
+        }
+        *self.ids.lock().unwrap() = staged.iter().map(|(_, key)| key.id()).collect();
+        self.retire(&self.active, &staged);
+        self.active = staged;
+        Ok(())
+    }
+    fn retire(&self, old: &[(Shortcut, HotKey)], keep: &[(Shortcut, HotKey)]) {
+        for (shortcut, key) in old {
+            if !keep.iter().any(|(kept, _)| shortcut == kept) {
+                let _ = self.manager.unregister(*key);
+            }
+        }
+    }
+}
+pub fn configure(hotkeys: &Hotkeys, path: &std::path::Path) -> Result<(), String> {
+    BACKEND.with(|backend| {
+        backend
+            .borrow_mut()
+            .as_mut()
+            .ok_or("Global shortcuts are unavailable on this desktop")?
+            .apply(hotkeys, Some(path))
+    })
+}
+
+pub fn start_backend(tx: Sender<Event>, hotkeys: &Hotkeys) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         return Err("Wayland: global register shortcuts are unavailable; use the picker to save/load clipboard text, then paste normally.".into());
     }
     // On macOS this MUST run on the UI/main thread, where Tauri pumps events.
     let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
-    let copy = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyC);
-    let paste = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyV);
-    let menu = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
-    manager.register(menu).map_err(|e| e.to_string())?;
-    manager.register(copy).map_err(|e| e.to_string())?;
-    manager.register(paste).map_err(|e| e.to_string())?;
+    let ids = Arc::new(Mutex::new(Vec::new()));
+    let event_ids = ids.clone();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
         // Release avoids injecting native Copy while the activation key is held.
         if event.state == HotKeyState::Released {
-            if event.id == menu.id() {
+            let ids = event_ids.lock().unwrap();
+            if ids.first() == Some(&event.id) {
                 let _ = tx.send(Event::Toggle { target: target() });
-            } else if event.id == copy.id() {
+            } else if ids.get(1) == Some(&event.id) {
                 let _ = tx.send(Event::PrepareCopy { target: target() });
-            } else if event.id == paste.id() {
+            } else if ids.get(2) == Some(&event.id) {
                 let _ = tx.send(Event::Show {
                     copy: false,
                     target: target(),
@@ -36,9 +114,14 @@ pub fn start_backend(tx: Sender<Event>) -> Result<(), String> {
             }
         }
     }));
-    // One manager per process, retained until process exit to retain registration.
-    Box::leak(Box::new(manager));
-    Ok(())
+    let mut backend = Backend {
+        manager,
+        active: Vec::new(),
+        ids,
+    };
+    let result = backend.apply(hotkeys, None);
+    BACKEND.with(|slot| *slot.borrow_mut() = Some(backend));
+    result
 }
 
 pub fn sequence() -> u64 {

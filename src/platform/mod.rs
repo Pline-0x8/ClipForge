@@ -20,6 +20,6 @@ mod portable;
 #[cfg(not(windows))]
 pub use portable::*;
 
-pub fn start(tx: Sender<Event>) -> Result<(), String> {
-    start_backend(tx)
+pub fn start(tx: Sender<Event>, hotkeys: &crate::settings::Hotkeys) -> Result<(), String> {
+    start_backend(tx, hotkeys)
 }

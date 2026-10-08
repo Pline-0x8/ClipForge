@@ -136,7 +136,7 @@ fn real_windows_edit_copy_register_paste_history_and_clear() {
     let (updates, rx) = mpsc::channel();
     let worker = thread::spawn(move || service::run(commands, updates));
     let (events, event_rx) = mpsc::channel();
-    platform::start(events).unwrap();
+    platform::start(events, &clipforge::settings::Hotkeys::default()).unwrap();
     prefix(b'C' as u16);
     key(b'X' as u16, false);
     key(b'X' as u16, true);

@@ -1,10 +1,15 @@
 use super::Event;
 use crate::input::{Action, Input};
+use crate::settings::{self, Hotkeys, Shortcut};
 use std::{
     cell::RefCell,
     mem::size_of,
+    path::PathBuf,
     ptr::null_mut,
-    sync::mpsc::{self, Sender},
+    sync::{
+        OnceLock,
+        mpsc::{self, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -14,7 +19,28 @@ use windows_sys::Win32::{
 };
 
 const MARKER: usize = 0x434C495046524745;
-const MENU_HOTKEY: i32 = 1;
+struct Configure {
+    hotkeys: Hotkeys,
+    path: PathBuf,
+    reply: Sender<Result<(), String>>,
+}
+static CONFIGURE: OnceLock<Sender<Configure>> = OnceLock::new();
+
+pub fn configure(hotkeys: &Hotkeys, path: &std::path::Path) -> Result<(), String> {
+    let (reply, result) = mpsc::channel();
+    CONFIGURE
+        .get()
+        .ok_or("Shortcut backend is unavailable")?
+        .send(Configure {
+            hotkeys: hotkeys.clone(),
+            path: path.to_owned(),
+            reply,
+        })
+        .map_err(|_| "Shortcut backend is unavailable")?;
+    result
+        .recv()
+        .map_err(|_| "Shortcut backend is unavailable")?
+}
 
 pub struct Instance(windows_sys::Win32::Foundation::HANDLE);
 impl Drop for Instance {
@@ -42,7 +68,7 @@ pub fn acquire_instance() -> Result<Instance, String> {
         if GetLastError() == ERROR_ALREADY_EXISTS {
             CloseHandle(handle);
             return Err(
-                "ClipForge is already running. Press Ctrl+Alt+Space to open its picker.".into(),
+                "ClipForge is already running. Use its tray icon or configured menu shortcut to open the picker.".into(),
             );
         }
         Ok(Instance(handle))
@@ -84,18 +110,6 @@ unsafe extern "system" fn hook(code: i32, wparam: usize, lparam: isize) -> isize
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     let down = wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize;
-    // Space belongs to RegisterHotKey. Swallowing it here prevents Windows
-    // from generating WM_HOTKEY. Keep the hook exclusively for C/V prefixes.
-    if data.vkCode == u32::from(VK_SPACE) {
-        if down {
-            STATE.with(|s| {
-                if let Some(s) = s.borrow_mut().as_mut() {
-                    s.input.cancel_prefix();
-                }
-            });
-        }
-        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
-    }
     let suppress = STATE.with(|state| {
         let mut state = state.borrow_mut();
         let Some(state) = state.as_mut() else {
@@ -113,11 +127,28 @@ unsafe extern "system" fn hook(code: i32, wparam: usize, lparam: isize) -> isize
             .iter()
             .any(|&k| state.keys[k as usize]);
         let alt = [VK_LMENU, VK_RMENU].iter().any(|&k| state.keys[k as usize]);
-        let decision = state.input.handle(
+        let shift = [VK_LSHIFT, VK_RSHIFT]
+            .iter()
+            .any(|&k| state.keys[k as usize]);
+        let win = [VK_LWIN, VK_RWIN].iter().any(|&k| state.keys[k as usize]);
+        let modifiers = (u32::from(ctrl) * settings::CTRL)
+            | (u32::from(alt) * settings::ALT)
+            | (u32::from(shift) * settings::SHIFT)
+            | (u32::from(win) * settings::SUPER);
+        // Let Windows generate WM_HOTKEY for the menu. Prefixes are consumed
+        // by the hook; their native registrations reserve them for conflict detection.
+        if state.input.menu_matches(data.vkCode as u16, modifiers)
+            && !state.input.is_swallowed(data.vkCode as u16)
+        {
+            if down {
+                state.input.cancel_prefix();
+            }
+            return false;
+        }
+        let decision = state.input.handle_modifiers(
             data.vkCode as u16,
             down,
-            ctrl,
-            alt,
+            modifiers,
             Instant::now(),
             target(),
         );
@@ -132,20 +163,80 @@ unsafe extern "system" fn hook(code: i32, wparam: usize, lparam: isize) -> isize
         unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
     }
 }
-pub fn start_backend(tx: Sender<Event>) -> Result<(), String> {
-    start_backend_thread(tx).map(|_| ())
+pub fn start_backend(tx: Sender<Event>, hotkeys: &Hotkeys) -> Result<(), String> {
+    let (sender, rx) = mpsc::channel();
+    let _ = CONFIGURE.set(sender);
+    start_backend_thread(tx, hotkeys.clone(), rx).map(|_| ())
 }
-fn start_backend_thread(tx: Sender<Event>) -> Result<u32, String> {
+// Register additions before retiring any old registration. Matching shortcuts
+// retain their IDs, including when actions exchange shortcuts.
+fn stage(
+    shortcuts: [Shortcut; 3],
+    active: &[(Shortcut, i32)],
+    next_id: &mut i32,
+) -> Result<Vec<(Shortcut, i32)>, String> {
+    let mut staged = Vec::new();
+    for (index, shortcut) in shortcuts.into_iter().enumerate() {
+        if let Some(existing) = active.iter().find(|(key, _)| *key == shortcut) {
+            staged.push(*existing);
+            continue;
+        }
+        *next_id += 1;
+        let id = *next_id;
+        if unsafe {
+            RegisterHotKey(
+                null_mut(),
+                id,
+                shortcut.modifiers | MOD_NOREPEAT,
+                u32::from(shortcut.key),
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            retire(&staged, active);
+            return Err(format!(
+                "{} shortcut {} is unavailable: {error}. Another application or Windows may own it.",
+                ["Menu", "Register copy", "Register paste"][index],
+                shortcut.label()
+            ));
+        }
+        staged.push((shortcut, id));
+    }
+    Ok(staged)
+}
+fn retire(old: &[(Shortcut, i32)], keep: &[(Shortcut, i32)]) {
+    for (_, id) in old {
+        if !keep.iter().any(|(_, kept)| id == kept) {
+            unsafe {
+                UnregisterHotKey(null_mut(), *id);
+            }
+        }
+    }
+}
+fn start_backend_thread(
+    tx: Sender<Event>,
+    hotkeys: Hotkeys,
+    requests: mpsc::Receiver<Configure>,
+) -> Result<u32, String> {
     let (ready_tx, ready_rx) = mpsc::channel();
     thread::spawn(move || unsafe {
         let mut keys = [false; 256];
-        for key in [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU] {
+        for key in [
+            VK_LCONTROL,
+            VK_RCONTROL,
+            VK_LMENU,
+            VK_RMENU,
+            VK_LSHIFT,
+            VK_RSHIFT,
+            VK_LWIN,
+            VK_RWIN,
+        ] {
             keys[key as usize] = GetAsyncKeyState(key as i32) < 0;
         }
         STATE.with(|s| {
             *s.borrow_mut() = Some(HookState {
                 input: Input::default(),
-                tx,
+                tx: tx.clone(),
                 keys,
             })
         });
@@ -159,31 +250,68 @@ fn start_backend_thread(tx: Sender<Event>) -> Result<u32, String> {
             let _ = ready_tx.send(Err("Could not install keyboard hook".to_owned()));
             return;
         }
-        if RegisterHotKey(
-            null_mut(),
-            MENU_HOTKEY,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            u32::from(VK_SPACE),
-        ) == 0
-        {
-            let code = windows_sys::Win32::Foundation::GetLastError();
-            UnhookWindowsHookEx(handle);
-            let _ = ready_tx.send(Err(format!("Could not register Ctrl+Alt+Space (Windows error {code}). Another application may own this shortcut.")));
-            return;
-        }
-
-        let _ = ready_tx.send(Ok(
-            windows_sys::Win32::System::Threading::GetCurrentThreadId(),
-        ));
+        let mut next_id = 0;
+        let initial = hotkeys
+            .parsed()
+            .and_then(|keys| stage(keys, &[], &mut next_id));
+        let mut active = match initial {
+            Ok(active) => {
+                STATE.with(|s| {
+                    s.borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .input
+                        .configure(hotkeys.parsed().unwrap())
+                });
+                let _ = ready_tx.send(Ok(
+                    windows_sys::Win32::System::Threading::GetCurrentThreadId(),
+                ));
+                active
+            }
+            Err(error) => {
+                // Keep the thread alive so the settings dialog can recover.
+                STATE.with(|s| *s.borrow_mut() = None);
+                let _ = ready_tx.send(Err(error));
+                Vec::new()
+            }
+        };
+        // Preserve an event sender even when initial registration fails.
+        let event_tx = tx;
         loop {
+            while let Ok(request) = requests.try_recv() {
+                let result = request.hotkeys.parsed().and_then(|shortcuts| {
+                    let staged = stage(shortcuts, &active, &mut next_id)?;
+                    if let Err(error) = settings::save(&request.path, &request.hotkeys) {
+                        retire(&staged, &active);
+                        return Err(error);
+                    }
+                    retire(&active, &staged);
+                    active = staged;
+                    STATE.with(|s| {
+                        let mut state = s.borrow_mut();
+                        let state = state.get_or_insert_with(|| HookState {
+                            input: Input::default(),
+                            tx: event_tx.clone(),
+                            keys: [false; 256],
+                        });
+                        state.input.configure(shortcuts);
+                    });
+                    Ok(())
+                });
+                let _ = request.reply.send(result);
+            }
             let mut msg = std::mem::zeroed();
             while PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0 {
                 if msg.message == WM_QUIT {
-                    UnregisterHotKey(null_mut(), MENU_HOTKEY);
+                    retire(&active, &[]);
                     UnhookWindowsHookEx(handle);
                     return;
                 }
-                if msg.message == WM_HOTKEY && msg.wParam == MENU_HOTKEY as usize {
+                if msg.message == WM_HOTKEY
+                    && active
+                        .first()
+                        .is_some_and(|(_, id)| msg.wParam == *id as usize)
+                {
                     STATE.with(|s| {
                         if let Some(s) = s.borrow_mut().as_mut() {
                             s.input.cancel_prefix();
@@ -326,7 +454,14 @@ mod tests {
     #[test]
     fn native_hotkey_registration_dispatch_and_cleanup() {
         let (tx, rx) = mpsc::channel();
-        let thread_id = start_backend_thread(tx).expect("Native shortcut backend must start");
+        let (configure_tx, requests) = mpsc::channel();
+        let keys = Hotkeys {
+            menu: "Ctrl+Alt+Shift+F21".into(),
+            copy: "Ctrl+Alt+Shift+F22".into(),
+            paste: "Ctrl+Alt+Shift+F23".into(),
+        };
+        let thread_id = start_backend_thread(tx, keys.clone(), requests)
+            .expect("Native shortcut backend must start");
         // Exercise the real Win32 queue and backend dispatch, without synthesizing
         // physical keys or changing clipboard/focus on the user's desktop.
         unsafe {
@@ -334,18 +469,133 @@ mod tests {
                 RegisterHotKey(
                     null_mut(),
                     99,
-                    MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-                    u32::from(VK_SPACE)
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    0x84
                 ),
                 0,
-                "Backend must actually own Ctrl+Alt+Space"
+                "Backend must actually own the configured menu shortcut"
             );
+            assert_ne!(PostThreadMessageW(thread_id, WM_HOTKEY, 1, 0), 0);
+        }
+        let received = rx.recv_timeout(Duration::from_secs(2));
+        let path = std::env::temp_dir()
+            .join(format!("clipforge-native-{}", std::process::id()))
+            .join("hotkeys.json");
+        unsafe {
             assert_ne!(
-                PostThreadMessageW(thread_id, WM_HOTKEY, MENU_HOTKEY as usize, 0),
+                RegisterHotKey(
+                    null_mut(),
+                    99,
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    0x87
+                ),
                 0
             );
         }
-        let received = rx.recv_timeout(Duration::from_secs(2));
+        let conflicting = Hotkeys {
+            menu: "Ctrl+Alt+Shift+F20".into(),
+            paste: "Ctrl+Alt+Shift+F24".into(),
+            ..keys.clone()
+        };
+        let (reply, result) = mpsc::channel();
+        configure_tx
+            .send(Configure {
+                hotkeys: conflicting,
+                path: path.clone(),
+                reply,
+            })
+            .unwrap();
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .is_err()
+        );
+        assert!(!path.exists(), "Conflicts must not persist new settings");
+        unsafe {
+            UnregisterHotKey(null_mut(), 99);
+            assert_ne!(
+                RegisterHotKey(
+                    null_mut(),
+                    99,
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    0x83
+                ),
+                0,
+                "Conflict releases successfully staged additions"
+            );
+            UnregisterHotKey(null_mut(), 99);
+            assert_eq!(
+                RegisterHotKey(
+                    null_mut(),
+                    99,
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    0x84
+                ),
+                0,
+                "Conflict retains the original menu shortcut"
+            );
+        }
+        let swapped = Hotkeys {
+            menu: keys.copy.clone(),
+            copy: keys.menu.clone(),
+            paste: keys.paste.clone(),
+        };
+        let (reply, result) = mpsc::channel();
+        configure_tx
+            .send(Configure {
+                hotkeys: swapped.clone(),
+                path: path.clone(),
+                reply,
+            })
+            .unwrap();
+        assert!(result.recv_timeout(Duration::from_secs(2)).unwrap().is_ok());
+        assert_eq!(settings::load(&path).unwrap(), swapped);
+        let bad_path = path.join("hotkeys.json"); // A file cannot be a parent directory.
+        let changed = Hotkeys {
+            menu: "Ctrl+Alt+Shift+F24".into(),
+            ..keys.clone()
+        };
+        let (reply, result) = mpsc::channel();
+        configure_tx
+            .send(Configure {
+                hotkeys: changed,
+                path: bad_path,
+                reply,
+            })
+            .unwrap();
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap_err()
+                .contains("save")
+        );
+        assert_eq!(
+            settings::load(&path).unwrap(),
+            swapped,
+            "Write failure preserves stored settings"
+        );
+        unsafe {
+            assert_ne!(
+                RegisterHotKey(
+                    null_mut(),
+                    99,
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    0x87
+                ),
+                0,
+                "Write failure releases staged registration"
+            );
+            UnregisterHotKey(null_mut(), 99);
+        }
+        unsafe {
+            PostThreadMessageW(thread_id, WM_HOTKEY, 2, 0);
+        }
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(Event::Toggle { .. })
+        ));
         // Always release the native registration, even if the assertion fails.
         unsafe {
             PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
@@ -363,13 +613,14 @@ mod tests {
                 RegisterHotKey(
                     null_mut(),
                     99,
-                    MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-                    u32::from(VK_SPACE)
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    0x84
                 ),
                 0,
                 "Backend shutdown must release the hotkey"
             );
             assert_ne!(UnregisterHotKey(null_mut(), 99), 0);
         }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }
