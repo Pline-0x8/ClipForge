@@ -123,6 +123,7 @@
     else if(/^[a-z]$/i.test(event.key)&&!event.metaKey){event.preventDefault();if(!event.repeat)command('select_register',{register:event.key.toLowerCase()});}
   });
   listen('clipforge-toggle',()=>{if($('save-dialog').open)cancelSave();return action('dismiss',{commit:false});}).catch(error=>{$('status').textContent=String(error);});
+  listen('clipforge-blur',()=>{if($('save-dialog').open)cancelSave();return action('dismiss_on_blur');}).catch(error=>{$('status').textContent=String(error);});
   listen('clipforge-cancel-edit',cancelEdit).catch(error=>{$('status').textContent=String(error);});
   listen('clipforge-state',event=>render(event.payload)).then(()=>invoke('snapshot')).then(render).catch(error=>{$('status').textContent=String(error);});
 })();

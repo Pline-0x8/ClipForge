@@ -273,6 +273,16 @@ fn dismiss(app: tauri::AppHandle, commit: bool) -> Result<(), String> {
     hide(&app, commit)
 }
 #[tauri::command]
+fn dismiss_on_blur(app: tauri::AppHandle) -> Result<(), String> {
+    // A pending autosave may finish after the user has returned to the menu.
+    if let Some(window) = app.get_webview_window("main")
+        && !window.is_focused().map_err(|e| e.to_string())?
+    {
+        hide_with_focus(&app, false, false)?;
+    }
+    Ok(())
+}
+#[tauri::command]
 fn clear_all(app: tauri::AppHandle, state: State<'_, Runtime>) -> Result<(), String> {
     state.lock().clear_selection();
     state.send(Command::Clear)?;
@@ -387,6 +397,7 @@ fn main() {
             select_register,
             navigate,
             dismiss,
+            dismiss_on_blur,
             clear_all,
             quit
         ])
@@ -466,9 +477,28 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = hide(window.app_handle(), false);
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = hide(window.app_handle(), false);
+                }
+                tauri::WindowEvent::Focused(false) => {
+                    let app = window.app_handle();
+                    let (visible, pinned) = {
+                        let state = app.state::<Runtime>();
+                        let picker = state.lock();
+                        (picker.visible, picker.pinned)
+                    };
+                    if visible {
+                        if pinned {
+                            let _ = app.emit("clipforge-blur", ());
+                        } else {
+                            // Leave focus with the application the user clicked.
+                            let _ = hide_with_focus(app, false, false);
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!());

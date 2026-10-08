@@ -13,7 +13,7 @@ cargo build --release --locked
 .\target\release\clipforge.exe
 ```
 
-ClipForge starts hidden with no taskbar button. Press **Ctrl+Alt+Space** to toggle the centered menu. It stays open when modifiers are released or another application takes focus. Escape or Hide closes it; toggling it again saves any active edit before closing. Use **Quit** to exit. `clipforge.exe --show` opens the menu explicitly.
+ClipForge starts hidden with no taskbar button. Press **Ctrl+Alt+Space** to toggle the centered menu. It stays open when modifiers are released and hides when you click outside it or switch applications. An active edit saves before hiding; validation or write failures keep the edit available. Clicking outside leaves focus with the application you clicked. Escape or Hide closes it; toggling it again saves any active edit before closing. Use **Quit** to exit. `clipforge.exe --show` opens the menu explicitly.
 
 On Windows, Space uses `RegisterHotKey` with repeat suppression; the C/V register prefixes use the separate keyboard hook. Idle menu closing runs directly in Rust. A shortcut registration failure opens the menu with the error instead of leaving the app silently hidden. ClipForge does not create log files.
 
@@ -33,7 +33,7 @@ Registers are case-insensitive. The letter prefix expires after two seconds. C/V
 
 - **Current Clipboard** at the top shows the host clipboard's current text. Drag a history entry onto it to load that full text, or click the cell to edit the clipboard manually. You can also drag current text into a register.
 - Click a populated register cell to load its current contents and enter inline editing. Edit the optional name (up to 80 characters) and full multiline text. Empty registers are editable too.
-- Click the green **Submit** button or elsewhere **within the application** to save the edit. Escape cancels changes. Opening an editor keeps the picker visible when Ctrl/Alt are released; standard Ctrl+C/V works inside the text fields.
+- Click the green **Submit** button or elsewhere to save the edit. Clicking outside the menu also hides it after saving. Escape cancels changes. Opening an editor keeps the picker visible when Ctrl/Alt are released; standard Ctrl+C/V works inside the text fields.
 - Clicking a history cell loads its text immediately. Application actions wait for an active edit to save first. Editing/using the picker keeps it open; use Hide/Esc or Ctrl+Alt+Space to return to the original app.
 - Each populated/named register has a **trash** button that clears its name and contents only. History and the host clipboard remain unchanged. Register editing leaves the host clipboard at the value loaded when that register was clicked; the edited value is used on its next load.
 - Drag history onto a register to save its **full text**, replacing the contents while preserving its name. The target highlights. A drop leaves the host clipboard unchanged unless the target is Current Clipboard.
