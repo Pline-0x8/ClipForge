@@ -1,110 +1,178 @@
-# ClipForge
+<p align="center">
+  <img src="docs/images/clipforge.png" width="128" height="128" alt="ClipForge: a mint clipboard and forge spark">
+</p>
 
-A Tauri desktop picker backed by a Rust clipboard service: 26 letter registers and a ring of 100 recent texts. It uses the host clipboard and native Copy/Paste commands. VMware/VM tools provide guest clipboard sharing.
+<h1 align="center">ClipForge</h1>
+<p align="center">Keep useful text in letter registers. Bring your clipboard history back when you need it.</p>
+<p align="center">
+  <a href="https://github.com/Pline-0x8/ClipForge/releases">Downloads</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#keyboard-shortcuts">Shortcuts</a> ·
+  <a href="docs/DEVELOPMENT.md">Development</a>
+</p>
 
-The application name is **ClipForge**. Rust package names, executable names, and internal identifiers use lowercase `clipforge`.
+ClipForge is a desktop clipboard manager built with Rust and Tauri. It runs quietly in your system tray, gives you **26 named registers (A–Z)** for reusable text, and keeps **100 unique recent clipboard entries**. Save a command, a quick reply, or a snippet to a letter and paste it again with a shortcut.
 
-## Run
+![ClipForge picker showing the current clipboard, named letter registers, and recent text history](docs/images/picker.png)
 
-Windows needs a recent stable Rust toolchain, MSVC build tools, and Microsoft WebView2 Runtime. The frontend is plain HTML/CSS/JavaScript; Node is needed only for frontend tests, and no npm install or frontend build is required.
+*The actual frontend, captured in Chrome with sample data. These documentation screenshots do not access the host clipboard.*
+
+## Features
+
+- **Keep snippets on a letter.** Name registers and store full multiline text.
+- **Recover recent copies.** History removes duplicates and moves reused text to the top.
+- **Edit in place.** Click the current clipboard or a register to edit its text.
+- **Drag to save.** Drop history or current clipboard text onto a register; drop history onto Current clipboard to load it.
+- **Choose your shortcuts.** Configure picker, register-copy, and register-paste hotkeys from the gear button.
+- **Keep clipboard data in memory.** Registers, names, and history disappear on exit. Only hotkey settings persist.
+
+## Install on Windows
+
+1. Open [Releases](https://github.com/Pline-0x8/ClipForge/releases) and download `clipforge.exe` from a release that includes a Windows asset.
+2. Put it in a folder where you want to keep it, then run it. No installer is required.
+3. Click the ClipForge tray icon, choose **Open ClipForge** from its menu, or press **Ctrl+Alt+Space**.
+
+Windows needs the **Microsoft WebView2 Runtime**. If a release executable is not available, [build from source](#build-from-source).
+
+To start at login, create a shortcut to the executable in your Windows Startup folder (`Win+R`, then `shell:startup`). ClipForge starts hidden with no taskbar button.
+
+## Quick start
+
+### Save a snippet and paste it later
+
+On Windows, using the default shortcuts:
+
+1. Select text in another application.
+2. Press **Ctrl+Alt+C**, release **C**, then press **X** within two seconds. ClipForge copies the selection into register X.
+3. Move to the application where you want the text.
+4. Press **Ctrl+Alt+V**, release **V**, then press **X**. Release the modifiers so ClipForge can send native Paste.
+
+Letters are case-insensitive. You can release Ctrl and Alt before pressing the register letter. Ordinary Ctrl+C and Ctrl+V continue to work normally.
+
+For applications that copy with a different shortcut, copy normally, open ClipForge, click **Save current…**, and choose a letter.
+
+### Use history and drag/drop
+
+Open the picker with **Ctrl+Alt+Space**. Current clipboard is at the top, registers are on the left, and history is on the right.
+
+- Click a history entry to load its full text into the host clipboard. Hide the picker and paste normally.
+- Drag history onto a register to save the full text, preserving its name and leaving the host clipboard unchanged.
+- Drag history onto **Current clipboard** to load it, or drag Current clipboard onto a register to save it.
+- Use arrows or Tab to highlight a populated entry. Enter loads it and closes the picker.
+
+Previews show two lines; stored text preserves the remaining lines, Unicode, and whitespace.
+
+### Name and edit a register
+
+Click a register to open its inline editor. A populated register also loads its existing text into the current clipboard when clicked. Add a name, edit the full text, and click **Submit** or elsewhere to save. **Escape** cancels the edit.
+
+![Inline register editor showing a Development VM name, multiline SSH command, and Submit button](docs/images/register-edit.png)
+
+*Editing register X in the same demo frontend. The edited text is used on its next load; saving the register does not rewrite the host clipboard.*
+
+Empty registers are editable too. Names can contain up to 80 characters. Untouched editors preserve original line endings. Validation or write errors keep the edit available for correction or retry.
+
+The trash button clears one register's name and contents, leaving history and the host clipboard unchanged. **Clear all** empties every register, history, and the host clipboard.
+
+## Keyboard shortcuts
+
+| Default keys | Action |
+| --- | --- |
+| Ctrl+Alt+Space | Open or hide the picker |
+| Ctrl+Alt+C, release C, then A–Z | Copy selected text into a register on Windows |
+| Ctrl+Alt+V, release V, then A–Z | Load a register and paste it on Windows |
+| A–Z in the picker | Load and paste that register when no editor or dialog is active |
+| Arrows / Tab / Shift+Tab | Navigate populated registers and history |
+| Enter | Load the highlighted entry and close the picker |
+| Escape | Cancel an edit, or close the picker |
+| Ctrl+C / Ctrl+V | Normal copy/paste inside editors and other applications |
+
+The copy/paste prefix expires after two seconds. Holding its activation key never opens the menu. The picker stays open when modifiers are released. Clicking outside or toggling it saves an active edit before hiding; errors keep the edit available. **Hide** closes the picker; **Quit** exits the application.
+
+### Change the hotkeys
+
+Click the **gear**. Choose modifier checkboxes and one key for each action: Space, a letter, a digit, or F1–F24. Include Ctrl, Alt, or Win / Command, and give each action a distinct shortcut.
+
+**Save** applies and persists shortcuts immediately. Conflicting or reserved shortcuts show an error and retain the previous configuration. **Restore defaults** fills the defaults; Save applies them. Cancel or Escape discards changes. Clicking outside or toggling the picker saves changed settings before hiding and retains the dialog on errors.
+
+On Windows, settings live in `%APPDATA%\dev.clipforge.desktop\hotkeys.json`. Invalid saved settings produce an error and use defaults for that session. Global hotkey settings are unavailable on Wayland.
+
+## Data and platform behavior
+
+ClipForge supports **plain text only**, up to **1 MiB per entry**. Images, HTML clipboard formats, and files are not supported. The service observes clipboard text every 120 ms and keeps 100 unique nonempty history entries. Repeated Paste does not add duplicates.
+
+Clipboard contents, register names, and history are never logged or persisted by ClipForge. They disappear on exit. The host clipboard may still contain the last loaded text after ClipForge quits.
+
+| Platform | Behavior |
+| --- | --- |
+| Windows | Global letter prefixes, native Copy/Paste, and a Tauri/WebView2 picker. Local validation is recorded in [TESTING.md](TESTING.md). |
+| macOS | System WebView and a focused register chooser for copy/paste shortcuts. Injection uses Command+C/V and requires Accessibility permission. Runtime behavior has not been validated here. |
+| Linux X11 | Focused register chooser, Ctrl+C/V injection, and selection timestamp tracking. Runtime behavior has not been validated here. |
+| Linux Wayland | Manual `--show` picker with Save current and clipboard loading. Clipboard access needs compositor data-control support; global shortcuts and automatic input are unavailable. |
+
+Windows cannot inject into elevated applications from a lower-integrity process. A VM may capture host shortcuts; enable clipboard sharing in VMware or your guest tools. ClipForge uses the host clipboard; guest tools handle VM sharing.
+
+Copy waits up to three seconds for new readable text. Identical copies on X11 can require **Save current…** when selection timestamps are unavailable. Transient read failures retain the last known clipboard value; absent or unsupported text is shown explicitly.
+
+## Build from source
+
+Windows needs a recent stable Rust toolchain, MSVC build tools, and Microsoft WebView2 Runtime. See [Tauri's native prerequisites](https://v2.tauri.app/start/prerequisites/) for macOS and Linux requirements.
 
 ```powershell
+git clone https://github.com/Pline-0x8/ClipForge.git
+cd ClipForge
 cargo build --release --locked
 .\target\release\clipforge.exe
 ```
 
-ClipForge starts hidden with no taskbar button. Press **Ctrl+Alt+Space** to toggle the centered menu. It stays open when modifiers are released and hides when you click outside it or switch applications. An active edit saves before hiding; validation or write failures keep the edit available. Clicking outside leaves focus with the application you clicked. Escape or Hide closes it; toggling it again saves any active edit before closing. Use **Quit** to exit. `clipforge.exe --show` opens the menu explicitly.
+To open the picker immediately:
 
-On Windows, Space uses `RegisterHotKey` with repeat suppression; the C/V register prefixes use the separate keyboard hook. Idle menu closing runs directly in Rust. A shortcut registration failure opens the menu with the error instead of leaving the app silently hidden. ClipForge does not create log files.
+```powershell
+.\target\release\clipforge.exe --show
+```
 
-| Keys | Action |
-| --- | --- |
-| Ctrl+Alt+C, release C, then a-z | Native Copy into that register (Windows). |
-| Ctrl+Alt+V, release V, then a-z | Load that register and trigger native Paste (Windows). |
-| Ctrl+Alt+Space | Toggle the centered clipboard editor. |
-| Arrows / Tab / Shift+Tab | Navigate menu entries. |
-| Enter | Load the highlighted entry and close the menu. |
-| Esc | Cancel an active edit; otherwise close the menu. |
-| Ordinary Ctrl+C / Ctrl+V | Normal application behavior. |
+The frontend is static HTML/CSS/JavaScript. No npm install or frontend build is required. Node is needed only for frontend tests and the optional screenshot script. Installer bundling is currently disabled.
 
-Registers are case-insensitive. The letter prefix expires after two seconds. C/V never open the menu, however long they are held. You can release Ctrl/Alt before typing the letter; release all modifiers to allow native Copy/Paste injection. In a visible menu, a plain letter loads and pastes its register. Applications using Ctrl+Shift+C/V can use native Copy followed by **Save current** instead.
-
-## Picker and history
-
-- **Current Clipboard** at the top shows the host clipboard's current text. Drag a history entry onto it to load that full text, or click the cell to edit the clipboard manually. You can also drag current text into a register.
-- Click a populated register cell to load its current contents and enter inline editing. Edit the optional name (up to 80 characters) and full multiline text. Empty registers are editable too.
-- Click the green **Submit** button or elsewhere to save the edit. Clicking outside the menu also hides it after saving. Escape cancels changes. Opening an editor keeps the picker visible when Ctrl/Alt are released; standard Ctrl+C/V works inside the text fields.
-- Clicking a history cell loads its text immediately. Application actions wait for an active edit to save first. Editing/using the picker keeps it open; use Hide/Esc or Ctrl+Alt+Space to return to the original app.
-- Each populated/named register has a **trash** button that clears its name and contents only. History and the host clipboard remain unchanged. Register editing leaves the host clipboard at the value loaded when that register was clicked; the edited value is used on its next load.
-- Drag history onto a register to save its **full text**, replacing the contents while preserving its name. The target highlights. A drop leaves the host clipboard unchanged unless the target is Current Clipboard.
-- Previews show two lines. Full text preserves Unicode, whitespace, and remaining lines. An untouched editor does not rewrite its value or normalize its original line endings.
-- **Save current** saves the host clipboard to a letter; **Clear all** empties every register name/content, history, and the host clipboard.
-- The ring observes text every 120 ms, keeps 100 unique entries, and promotes saved/loaded entries. Repeated Paste adds no history.
-- Entries are limited to 1 MiB. Register names, contents, and history stay in memory and disappear on exit. Clipboard text is never logged or persisted. Images, HTML, and files are not supported.
-- Validation/write errors remain visible and preserve an active edit. Current clipboard writes wait for OS confirmation. Transient clipboard read failures retain the last known value; unsupported/absent text is shown explicitly.
-
-## Start at login
-
-Copy the release executable from `target\release\clipforge.exe` to `release\bin\x64\clipforge.exe` for distribution, then create a shortcut to that copy in your Windows Startup folder (`Win+R`, `shell:startup`). It runs silently on login. The cleanup script preserves the `release` folder. Launch directly from your desktop when testing; launches from an isolated automation desktop cannot observe your keyboard.
-
-## Platforms
-
-| Host | Status |
-| --- | --- |
-| Windows | Rust low-level hook, register prefixes and persistent Space menu, SendInput, clipboard sequence tracking, Tauri/WebView2 GUI. Local test results in TESTING.md. |
-| macOS | Tauri system WebView; Ctrl+Alt+Space toggles the editor; C/V use a focused register chooser rather than global letter capture. Injection uses Command+C/V and needs Accessibility permission. Source not compiled or tested here. |
-| Linux X11 | Tauri/WebKitGTK; chooser behavior as on macOS, Ctrl+C/V injection and selection timestamp tracking. Source not compiled or tested here. |
-| Linux Wayland | Manual `--show` picker with Save current/Load; clipboard access needs compositor data-control support. Global shortcuts and automatic input unavailable. |
-
-Windows cannot inject into elevated applications from a lower-integrity process. A VM may capture host shortcuts; guest tools must enable clipboard sharing. Copy waits up to three seconds for changed readable text; identical copies on X11 can need **Save current** when selection timestamps are unavailable.
-
-Tauri native prerequisites are documented at https://v2.tauri.app/start/prerequisites/. Linux builds need GTK3, WebKitGTK 4.1, OpenSSL, librsvg, and X11 development libraries. CI includes those dependencies; macOS/Linux runtime validation still requires those hosts.
-
-## Development and testing
+## Development
 
 ```powershell
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 node tests/ui.test.cjs
 node --check ui/app.js
-cargo run --locked -- --smoke-ui
-cargo run --locked -- --smoke-background
-# Run opt-in real clipboard tests individually, not in parallel:
-cargo test --test windows_smoke real_clipboard_register_ring_and_clear -- --ignored --test-threads=1
-cargo test --test windows_smoke saving_history_text_to_register_preserves_exact_text_and_host_clipboard -- --ignored --test-threads=1
 ```
 
-The desktop tests temporarily replace clipboard text, and the keyboard fixture changes focus. Only previous plain text is restored. See TESTING.md for validated checks and remaining limitations.
+CI tests and builds on Windows, macOS, and Linux. Native desktop validation is separate from unit tests. See [TESTING.md](TESTING.md) for smoke checks, opt-in clipboard tests, and validation gaps. [Development](docs/DEVELOPMENT.md) preserves the build-output and cleanup instructions.
 
-## Cleaning build output and caches
+| Location | Responsibility |
+| --- | --- |
+| `src/core.rs` | In-memory registers and history |
+| `src/service.rs` | Clipboard operations on a worker thread |
+| `src/input.rs` | Windows shortcut state machine |
+| `src/platform/` | Native shortcuts, focus, input injection, and hotkey registration |
+| `src/settings.rs` | Hotkey validation and persistence |
+| `src/picker.rs` | Selection state and snapshots |
+| `src/main.rs` | Tauri runtime, tray, and command bridge |
+| `ui/` | Static frontend |
 
-Compiled output stays in the ignored `target` directory inside the repository. Cargo's standard release executable path is `target/release/clipforge.exe`; distribution copies belong in the ignored `release/bin/x64` folder. Downloaded dependencies stay in Cargo's user-wide cache (normally `$HOME/.cargo`). Tauri may generate a small ignored `gen` directory; the cleanup script removes it. Keep `Cargo.lock` for reproducible dependency versions.
+Snapshots reach the frontend through Tauri events. Clipboard operations run off the UI thread; clipboard text is rendered with `textContent`.
 
-Development builds use line-table debug information and disable incremental compilation to reduce disk usage. Backtraces retain source locations; debugger variable inspection is limited, and recompiling edited code may take longer. These settings also apply to the inherited test profile; release settings are unchanged.
+### Artwork and screenshots
+
+The generated master is [`icons/clipforge-source.png`](icons/clipforge-source.png). The tray uses `icons/icon.png`; the Windows executable uses `icons/icon.ico`. Regenerate the PNG sizes and multi-resolution ICO on Windows with:
 
 ```powershell
-# Remove Cargo build output:
-cargo clean
-# Preview removal of project build output, old distributions, and generated schemas:
-.\scripts\clean.ps1 -WhatIf
-# Remove those generated directories:
-.\scripts\clean.ps1
-# Also remove any project-local Cargo cache:
-.\scripts\clean.ps1 -IncludeLocalCache
+.\scripts\build-icons.ps1
 ```
 
-If Windows disables script execution, run it with a process-only policy override: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -IncludeLocalCache`. Add `-WhatIf` to preview. This does not change the system execution policy.
+Regenerate the demo screenshots with Node 22 or later and Google Chrome:
 
-The script works from any directory and cleans generated directories inside this project. It preserves distribution copies in `release` and leaves the user-wide Cargo cache intact because other Rust projects share it. Before cleanup, copy release artifacts into `release/bin/x64`. The next build will recompile; deleting dependency caches also requires downloading them again. If you override `CARGO_TARGET_DIR`, use `cargo clean` to clean that location; the script only cleans the default project locations.
-
-Cargo 1.88 and later automatically evict unused user-wide cache entries. This does not clean project `target` directories. You can configure how often eviction runs in your user Cargo configuration:
-
-```toml
-[cache]
-auto-clean-frequency = "1 day"
+```powershell
+node scripts/capture-docs.cjs
 ```
 
-Stable Cargo does not provide a command to clear all downloaded dependencies. Manual global cache cleanup and custom eviction ages currently require nightly Cargo; see the [Cargo cache cleanup documentation](https://doc.rust-lang.org/cargo/reference/unstable.html#gc). Do not delete the entire user `.cargo` directory: it also contains installed executables, configuration, and credentials.
+Set `CLIPFORGE_CHROME` to Chrome's executable path if it differs from the Windows default. The script renders the actual frontend through a demo IPC bridge in a separate temporary profile, without monitoring the clipboard or registering shortcuts.
 
-`src/core.rs` owns storage, `src/input.rs` models Windows shortcuts, `src/platform` handles OS integration, `src/service.rs` serializes clipboard operations, and `src/picker.rs` owns selection state. `src/main.rs` hosts Tauri and exposes a small command bridge. `ui` contains the static frontend. Clipboard operations run off the UI thread; snapshots update the webview through Tauri events. The frontend renders clipboard contents with textContent and never interprets them as HTML.
+## License
 
+[MIT](LICENSE)
