@@ -113,10 +113,15 @@ impl Engine {
         self.history.clear();
     }
 
-    pub fn clear(&mut self) {
+    /// Clear all register contents and labels while retaining recent copies.
+    pub fn clear_registers(&mut self) {
         self.registers.iter_mut().for_each(|entry| *entry = None);
         self.register_names.iter_mut().for_each(String::clear);
-        self.history.clear();
+    }
+
+    pub fn clear(&mut self) {
+        self.clear_registers();
+        self.clear_history();
     }
 }
 
@@ -152,6 +157,21 @@ pub fn preview(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_registers_preserves_history_and_allows_reuse() {
+        let mut engine = Engine::default();
+        engine.edit_register('a', "First", "one").unwrap();
+        engine.edit_register('z', "Last", "two").unwrap();
+        let history = engine.history().to_vec();
+        engine.clear_registers();
+        engine.clear_registers();
+        assert!(engine.registers().iter().all(Option::is_none));
+        assert!(engine.register_names().iter().all(String::is_empty));
+        assert_eq!(engine.history(), history);
+        engine.edit_register('a', "New", "new text").unwrap();
+        assert_eq!(engine.registers()[0].as_deref(), Some("new text"));
+    }
 
     #[test]
     fn clearing_history_preserves_registers_and_accepts_new_copies() {

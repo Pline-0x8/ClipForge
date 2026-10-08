@@ -14,6 +14,7 @@ cargo run --locked -- --smoke-background
 # Run opt-in real clipboard tests individually, not in parallel:
 cargo test --test windows_smoke real_clipboard_register_ring_and_clear -- --ignored --test-threads=1
 cargo test --test windows_smoke saving_history_text_to_register_preserves_exact_text_and_host_clipboard -- --ignored --test-threads=1
+cargo test --locked --test windows_smoke clearing_ -- --ignored --test-threads=1
 ```
 
 The desktop tests temporarily replace clipboard text, and the keyboard fixture changes focus. Only previous plain text is restored. See [TESTING.md](../TESTING.md) for validated checks and remaining limitations.

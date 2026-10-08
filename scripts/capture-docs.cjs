@@ -79,6 +79,18 @@ async function main() {
       if (attempt === 99) throw new Error('Frontend did not initialize');
     }
     await evaluate('document.fonts.ready.then(() => true)');
+    // Check the panel actions at the minimum supported window width too.
+    for (const width of [650, 840]) {
+      await call('Emulation.setDeviceMetricsOverride', { width, height: 650, deviceScaleFactor: 2, mobile: false });
+      const fits = await evaluate(`['clear-history', 'clear-registers', 'save-current', 'clear'].every(id => {
+        const button = document.getElementById(id);
+        const rect = button.getBoundingClientRect();
+        const parent = button.closest('.panel') || button.closest('footer');
+        const bounds = parent.getBoundingClientRect();
+        return rect.width > 0 && rect.left >= bounds.left && rect.right <= bounds.right && rect.bottom <= innerHeight;
+      })`);
+      if (!fits) throw new Error(`Panel actions overflow at ${width}px`);
+    }
     const output = path.join(root, 'docs/images');
     await fs.mkdir(output, { recursive: true });
     const capture = async name => {

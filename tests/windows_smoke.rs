@@ -286,6 +286,40 @@ fn clearing_history_preserves_registers_and_does_not_recapture_current_clipboard
 }
 
 #[test]
+#[ignore = "Temporarily changes the real Windows text clipboard"]
+fn clearing_registers_preserves_history_and_current_clipboard() {
+    let mut clipboard = arboard::Clipboard::new().unwrap();
+    let _restore = Restore(clipboard.get_text().ok());
+    let current = "ClipForge registers clear: keep clipboard";
+    clipboard.set_text(current).unwrap();
+    let (tx, commands) = mpsc::channel();
+    let (updates, rx) = mpsc::channel();
+    let worker = thread::spawn(move || service::run(commands, updates));
+    snapshot(&rx, |e| e.history().iter().any(|text| text == current));
+    tx.send(Command::EditRegister {
+        register: 'z',
+        name: "Keep history".into(),
+        text: "Saved text".into(),
+    })
+    .unwrap();
+    snapshot(&rx, |e| e.register_names()[25] == "Keep history");
+    tx.send(Command::ClearRegisters).unwrap();
+    snapshot(&rx, |e| {
+        e.registers().iter().all(Option::is_none)
+            && e.register_names().iter().all(String::is_empty)
+            && e.history() == ["Saved text", current]
+    });
+    assert_eq!(clipboard.get_text().unwrap(), current);
+    tx.send(Command::Clear).unwrap();
+    snapshot(&rx, |e| {
+        e.history().is_empty() && e.registers().iter().all(Option::is_none)
+    });
+    assert_eq!(clipboard.get_text().unwrap_or_default(), "");
+    drop(tx);
+    worker.join().unwrap();
+}
+
+#[test]
 #[ignore = "Reads the real Windows clipboard; verifies errors never request a popup"]
 fn empty_or_invalid_register_paste_reports_status_without_show() {
     let (tx, commands) = mpsc::channel();

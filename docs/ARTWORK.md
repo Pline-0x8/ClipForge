@@ -25,3 +25,7 @@ and `ui/app.js` in headless Chrome at the configured 840 × 650 window size and
 2× pixel density. A demo IPC bridge supplies sample data. The captures illustrate
 frontend usage; they do not validate native WebView rendering, clipboard access,
 focus restoration, or keyboard injection.
+
+Run `node scripts/capture-docs.cjs` to refresh both README screenshots. The script
+also checks that the clear controls fit at the 650 px minimum window width and
+the default 840 px width. Set `CLIPFORGE_CHROME` if Chrome is installed elsewhere.

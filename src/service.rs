@@ -34,6 +34,7 @@ pub enum Command {
     },
     ClearRegister(char),
     ClearHistory,
+    ClearRegisters,
     Clear,
 }
 #[derive(Debug)]
@@ -258,6 +259,11 @@ pub fn run(rx: Receiver<Command>, tx: Sender<Update>) {
                                 "Cleared register {}",
                                 register.to_ascii_lowercase()
                             )));
+                        }
+                        Command::ClearRegisters => {
+                            engine.clear_registers();
+                            prepared = None;
+                            let _ = tx.send(Update::Status("Registers cleared".into()));
                         }
                         Command::ClearHistory => {
                             engine.clear_history();

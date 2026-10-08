@@ -286,6 +286,13 @@ fn dismiss_on_blur(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
+fn clear_registers(app: tauri::AppHandle, state: State<'_, Runtime>) -> Result<(), String> {
+    state.lock().clear_selection();
+    state.send(Command::ClearRegisters)?;
+    publish(&app);
+    Ok(())
+}
+#[tauri::command]
 fn clear_history(app: tauri::AppHandle, state: State<'_, Runtime>) -> Result<(), String> {
     state.lock().clear_selection();
     state.send(Command::ClearHistory)?;
@@ -499,6 +506,7 @@ fn main() {
             dismiss_on_blur,
             clear_all,
             clear_history,
+            clear_registers,
             save_hotkeys,
             quit
         ])

@@ -85,6 +85,9 @@ const setHotkey=(action,shortcut)=>{const parts=shortcut.split('+');for(const [i
  await cell().children[0].listeners.click();box().children[1].value='save before clearing history';
  await $('clear-history').onclick();assert.deepEqual(calls.slice(-3).map(call=>call.name),['edit_register','end_edit','clear_history']);
  handlers['clipforge-state']({payload:{...state,history:[]}});assert.equal($('count').textContent,'0 items');assert.equal($('registers').children.length,26);
+ handlers['clipforge-state']({payload:state});await cell().children[0].listeners.click();box().children[1].value='save before clearing registers';
+ await $('clear-registers').onclick();assert.deepEqual(calls.slice(-3).map(call=>call.name),['edit_register','end_edit','clear_registers']);
+ handlers['clipforge-state']({payload:{...state,registers:Array(26).fill(null),registerNames:Array(26).fill('')}});assert.equal($('history').children.length,state.history.length);assert.equal($('current-preview').textContent,state.currentClipboard);
  await $('clear').onclick();assert.equal(calls.at(-1).name,'clear_all');
- console.log('PASS: inline edits, autosave, focus loss, validation retention, history, drag/drop, settings, tray quit, separate history clearing');
+ console.log('PASS: inline edits, autosave, focus loss, validation retention, history, drag/drop, settings, tray quit, separate history and register clearing');
 })().catch(error=>{console.error(error);process.exitCode=1;});

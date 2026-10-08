@@ -28,7 +28,7 @@ Press the register letter within two seconds. Release modifiers to allow native 
 - **Load:** click history to put its full text on the clipboard, then hide and paste normally.
 - **Edit:** click a register, name it, and change its multiline text. **Submit** or click elsewhere to save; Escape cancels.
 - **Customize:** use the gear to change hotkeys. Settings persist; conflicts retain the previous configuration.
-- **Clear:** trash clears one register; **Clear history** removes recent copies while keeping registers, names, and the current clipboard. **Clear all** clears registers, history, and the host clipboard.
+- **Clear:** trash clears one register. **Clear registers** in the Registers panel clears all register text and names while keeping history and the current clipboard. **Clear history** in the History panel removes recent copies while keeping registers and the current clipboard. **Clear ALL** at the bottom clears both panels and the host clipboard.
 
 ![Editing a named register with a multiline command](docs/images/register-edit.png)
 
