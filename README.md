@@ -10,7 +10,7 @@ Windows needs a recent stable Rust toolchain, MSVC build tools, and Microsoft We
 
 ```powershell
 cargo build --release --locked
-..\.clipforge-build\release\clipforge.exe
+.\target\release\clipforge.exe
 ```
 
 ClipForge starts hidden with no taskbar button. Press **Ctrl+Alt+Space** to toggle the centered menu. It stays open when modifiers are released or another application takes focus. Escape or Hide closes it; toggling it again saves any active edit before closing. Use **Quit** to exit. `clipforge.exe --show` opens the menu explicitly.
@@ -45,7 +45,7 @@ Registers are case-insensitive. The letter prefix expires after two seconds. C/V
 
 ## Start at login
 
-Copy the release executable from `..\.clipforge-build\release\clipforge.exe` to a permanent application folder, then create a shortcut to that copy in your Windows Startup folder (`Win+R`, `shell:startup`). It runs silently on login. Keeping the installed copy separate means build cleanup will not remove it. Launch directly from your desktop when testing; launches from an isolated automation desktop cannot observe your keyboard.
+Copy the release executable from `target\release\clipforge.exe` to `release\bin\x64\clipforge.exe` for distribution, then create a shortcut to that copy in your Windows Startup folder (`Win+R`, `shell:startup`). It runs silently on login. The cleanup script preserves the `release` folder. Launch directly from your desktop when testing; launches from an isolated automation desktop cannot observe your keyboard.
 
 ## Platforms
 
@@ -78,7 +78,7 @@ The desktop tests temporarily replace clipboard text, and the keyboard fixture c
 
 ## Cleaning build output and caches
 
-This project's `.cargo/config.toml` places compiled output in `../.clipforge-build`, beside the repository. Normal `cargo build`, `run`, `test`, and `check` commands use that directory automatically. Downloaded dependencies stay in Cargo's user-wide cache (normally `$HOME/.cargo`). Tauri may still generate a small `gen` directory in the checkout; the cleanup script removes it. Keep `Cargo.lock` for reproducible dependency versions.
+Compiled output stays in the ignored `target` directory inside the repository. Cargo's standard release executable path is `target/release/clipforge.exe`; distribution copies belong in the ignored `release/bin/x64` folder. Downloaded dependencies stay in Cargo's user-wide cache (normally `$HOME/.cargo`). Tauri may generate a small ignored `gen` directory; the cleanup script removes it. Keep `Cargo.lock` for reproducible dependency versions.
 
 Development builds use line-table debug information and disable incremental compilation to reduce disk usage. Backtraces retain source locations; debugger variable inspection is limited, and recompiling edited code may take longer. These settings also apply to the inherited test profile; release settings are unchanged.
 
@@ -95,7 +95,7 @@ cargo clean
 
 If Windows disables script execution, run it with a process-only policy override: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -IncludeLocalCache`. Add `-WhatIf` to preview. This does not change the system execution policy.
 
-The script works from any directory and cleans the dedicated sibling `.clipforge-build` folder and generated directories in this project. It leaves the user-wide Cargo cache intact because other Rust projects share it. Before cleanup, copy release artifacts into a permanent application folder. The next build will recompile; deleting dependency caches also requires downloading them again. If you override `CARGO_TARGET_DIR`, use `cargo clean` to clean that location; the script only cleans the default project locations.
+The script works from any directory and cleans generated directories inside this project. It preserves distribution copies in `release` and leaves the user-wide Cargo cache intact because other Rust projects share it. Before cleanup, copy release artifacts into `release/bin/x64`. The next build will recompile; deleting dependency caches also requires downloading them again. If you override `CARGO_TARGET_DIR`, use `cargo clean` to clean that location; the script only cleans the default project locations.
 
 Cargo 1.88 and later automatically evict unused user-wide cache entries. This does not clean project `target` directories. You can configure how often eviction runs in your user Cargo configuration:
 

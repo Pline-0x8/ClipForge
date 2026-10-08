@@ -10,15 +10,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'Cargo.toml') -PathType
     throw 'Run this script from the ClipForge project.'
 }
 
-$externalBuildPath = [IO.Path]::GetFullPath((Join-Path $projectRoot '../.clipforge-build'))
-$cleanupNames = @('../.clipforge-build', 'target', 'dist', 'gen')
+$cleanupNames = @('target', 'dist', 'gen')
 if ($IncludeLocalCache) {
     $cleanupNames += '.cargo-local'
 }
 
 foreach ($cleanupName in $cleanupNames) {
     $cleanupPath = [IO.Path]::GetFullPath((Join-Path $projectRoot $cleanupName))
-    if ($cleanupPath -ne $externalBuildPath -and -not $cleanupPath.StartsWith($projectRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $cleanupPath.StartsWith($projectRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Cleanup path is outside the project: $cleanupPath"
     }
     if (-not (Test-Path -LiteralPath $cleanupPath)) {

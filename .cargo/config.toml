@@ -1,6 +1,6 @@
-# Keep compiled artifacts outside the source checkout.
+# Keep compiled artifacts inside the ignored project build directory.
 [build]
-target-dir = "../.clipforge-build"
+target-dir = "target"
 
 # Reduce development disk usage while retaining source locations in backtraces.
 [profile.dev]

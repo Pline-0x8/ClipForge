@@ -19,7 +19,7 @@ cargo run --locked -- --smoke-ui
 cargo run --locked -- --smoke-background
 ```
 
-Smoke checks verify WebView initialization and frontend-to-Rust communication. They use sample data without clipboard monitoring or hooks, have a 20-second watchdog, and store temporary profiles in `webview-smoke` beside the executable (normally `../.clipforge-build/debug/webview-smoke`). The background check also verifies hidden startup and error status.
+Smoke checks verify WebView initialization and frontend-to-Rust communication. They use sample data without clipboard monitoring or hooks, have a 20-second watchdog, and store temporary profiles in `webview-smoke` beside the executable (normally `target/debug/webview-smoke`). The background check also verifies hidden startup and error status.
 
 Opt-in Windows integration tests temporarily replace clipboard text; the keyboard fixture also changes focus. Only previous plain text is restored. Run tests individually from an interactive terminal, with one test thread:
 
