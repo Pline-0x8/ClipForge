@@ -13,6 +13,10 @@ use std::{
 pub enum Command {
     Platform(Event),
     Load(String),
+    LoadEntry {
+        id: u64,
+        reply: Sender<Result<(), String>>,
+    },
     SetClipboard {
         text: String,
         reply: Sender<Result<(), String>>,
@@ -41,6 +45,7 @@ pub enum Command {
 pub enum Update {
     Snapshot(Box<Engine>),
     Clipboard(Option<String>),
+    Content(Option<crate::content::EntryView>),
     Show { copy: bool, target: usize },
     Dismiss { target: usize, commit: bool },
     Status(String),
@@ -62,13 +67,22 @@ pub fn validate_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 fn read_text(clipboard: &mut Clipboard) -> Result<String, String> {
-    let text = clipboard.get_text().map_err(|e| e.to_string())?;
-    if text.len() > MAX_TEXT {
-        return Err("Text exceeds the 1 MiB entry limit".into());
+    #[cfg(windows)]
+    {
+        let _ = clipboard;
+        crate::content::read_text()?.ok_or("Clipboard has no supported text".into())
     }
-    Ok(text)
+    #[cfg(not(windows))]
+    {
+        let text = clipboard.get_text().map_err(|e| e.to_string())?;
+        if text.len() > MAX_TEXT {
+            return Err("Text exceeds the 1 MiB entry limit".into());
+        }
+        Ok(text)
+    }
 }
 // None skips a transient read failure; Some(None) means no supported text.
+#[cfg(any(not(windows), test))]
 fn monitor_text(result: Result<String, arboard::Error>) -> Option<Option<String>> {
     match result {
         Ok(text) if text.len() <= MAX_TEXT => Some(Some(text)),
@@ -77,25 +91,41 @@ fn monitor_text(result: Result<String, arboard::Error>) -> Option<Option<String>
     }
 }
 fn read_current(clipboard: &mut Clipboard) -> Option<Option<String>> {
-    // Some Windows read failures are reported as missing content, even when
-    // another clipboard reader merely caused a transient native read failure.
-    for attempt in 0..3 {
-        match clipboard.get_text() {
-            Err(arboard::Error::ContentNotAvailable) if attempt < 2 => {
-                thread::sleep(Duration::from_millis(15));
-            }
-            result => return monitor_text(result),
-        }
+    #[cfg(windows)]
+    {
+        let _ = clipboard;
+        crate::content::read_text().ok()
     }
-    unreachable!()
+    #[cfg(not(windows))]
+    {
+        // Some Windows read failures are reported as missing content, even when
+        // another clipboard reader merely caused a transient native read failure.
+        for attempt in 0..3 {
+            match clipboard.get_text() {
+                Err(arboard::Error::ContentNotAvailable) if attempt < 2 => {
+                    thread::sleep(Duration::from_millis(15));
+                }
+                result => return monitor_text(result),
+            }
+        }
+        unreachable!()
+    }
 }
 fn write_text(clipboard: &mut Clipboard, text: &str) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_millis(500);
-    loop {
-        match clipboard.set_text(text) {
-            Ok(()) => return Ok(()),
-            Err(e) if Instant::now() >= deadline => return Err(e.to_string()),
-            Err(_) => thread::sleep(Duration::from_millis(15)),
+    #[cfg(windows)]
+    {
+        let _ = clipboard;
+        crate::content::write_text(text)
+    }
+    #[cfg(not(windows))]
+    {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            match clipboard.set_text(text) {
+                Ok(()) => return Ok(()),
+                Err(e) if Instant::now() >= deadline => return Err(e.to_string()),
+                Err(_) => thread::sleep(Duration::from_millis(15)),
+            }
         }
     }
 }
@@ -136,6 +166,10 @@ pub fn run(rx: Receiver<Command>, tx: Sender<Update>) {
     let mut last_text: Option<String> = None;
     let mut last_clipboard: Option<String> = None;
     let mut prepared: Option<String> = None;
+    #[cfg(windows)]
+    let mut native_sequence = 0;
+    #[cfg(windows)]
+    let mut rich_current = false;
     loop {
         match rx.recv_timeout(Duration::from_millis(120)) {
             Ok(command) => {
@@ -203,6 +237,40 @@ pub fn run(rx: Receiver<Command>, tx: Sender<Update>) {
                             engine
                                 .save_register(register, &text)
                                 .map_err(|e| e.to_string())?;
+                        }
+                        Command::LoadEntry { id, reply } => {
+                            let result = (|| {
+                                let entry = engine
+                                    .entry(id)
+                                    .cloned()
+                                    .ok_or("This history entry has expired")?;
+                                if let Some(content) = entry.content {
+                                    #[cfg(windows)]
+                                    {
+                                        crate::content::restore(&content)?;
+                                        native_sequence = platform::sequence();
+                                        rich_current = true;
+                                        last_text = content.view.text.clone();
+                                        last_clipboard = last_text.clone();
+                                        let _ = tx.send(Update::Clipboard(last_text.clone()));
+                                        let _ = tx.send(Update::Content(Some(entry.view)));
+                                    }
+                                    #[cfg(not(windows))]
+                                    {
+                                        let _ = content;
+                                        return Err(
+                                            "Rich clipboard history currently requires Windows"
+                                                .into(),
+                                        );
+                                    }
+                                } else if let Some(text) = entry.view.text {
+                                    write_text(&mut clipboard, &text)?;
+                                    last_text = Some(text);
+                                }
+                                Ok(())
+                            })();
+                            let _ = reply.send(result.clone());
+                            result?;
                         }
                         Command::Load(text) => {
                             validate_text(&text)?;
@@ -292,6 +360,48 @@ pub fn run(rx: Receiver<Command>, tx: Sender<Update>) {
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        #[cfg(windows)]
+        {
+            let sequence = platform::sequence();
+            if sequence != native_sequence {
+                match crate::content::capture() {
+                    Ok(Some(content)) if content.view.kind != "text" => {
+                        last_text = content.view.text.clone();
+                        last_clipboard = last_text.clone();
+                        let _ = tx.send(Update::Clipboard(last_text.clone()));
+                        let view = content.view.clone();
+                        engine.observe_content(content);
+                        let _ = tx.send(Update::Content(Some(view)));
+                        let _ = tx.send(Update::Snapshot(Box::new(engine.clone())));
+                        rich_current = true;
+                        native_sequence = sequence;
+                    }
+                    Ok(_) => {
+                        rich_current = false;
+                        native_sequence = sequence;
+                        let _ = tx.send(Update::Content(None));
+                    }
+                    Err(error) => {
+                        if error.contains("limit")
+                            || error.contains("too many formats")
+                            || error.contains("too large")
+                        {
+                            native_sequence = sequence;
+                            rich_current = true;
+                            last_text = None;
+                            last_clipboard = None;
+                            let _ = tx.send(Update::Clipboard(None));
+                            let _ = tx.send(Update::Content(None));
+                        }
+                        let _ = tx.send(Update::Status(error));
+                        continue;
+                    }
+                }
+            }
+            if rich_current {
+                continue;
+            }
         }
         let Some(current) = read_current(&mut clipboard) else {
             continue;

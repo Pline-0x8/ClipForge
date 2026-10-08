@@ -56,14 +56,20 @@ fn hide_with_focus(
     let (target, text) = {
         let mut p = state.lock();
         let target = p.target;
-        (target, p.dismiss(commit))
+        (target, p.dismiss_target(commit))
     };
 
     if restore_focus {
         platform::focus(target);
     }
     if let Some(text) = text {
-        state.send(Command::Load(text))?;
+        match text {
+            clipforge::picker::Target::Text(text) => state.send(Command::Load(text))?,
+            clipforge::picker::Target::Entry(id) => {
+                let (reply, _) = mpsc::channel();
+                state.send(Command::LoadEntry { id, reply })?;
+            }
+        }
     }
     publish(app);
     Ok(())
@@ -104,6 +110,10 @@ fn show(app: &tauri::AppHandle, copy: bool, target: usize) {
 fn apply_update(app: &tauri::AppHandle, update: Update) {
     let state = app.state::<Runtime>();
     match update {
+        Update::Content(content) => {
+            state.lock().current_entry = content;
+            publish(app);
+        }
         Update::Snapshot(engine) => {
             state.lock().refresh(*engine);
             publish(app);
@@ -154,6 +164,25 @@ fn snapshot(state: State<'_, Runtime>) -> Snapshot {
         smoke_report("PASS: Tauri frontend initialized and invoked Rust snapshot");
     }
     state.lock().snapshot()
+}
+#[tauri::command]
+async fn load_entry(
+    app: tauri::AppHandle,
+    state: State<'_, Runtime>,
+    id: u64,
+) -> Result<(), String> {
+    let (reply, result) = mpsc::channel();
+    state.send(Command::LoadEntry { id, reply })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        result
+            .recv()
+            .map_err(|_| "Clipboard service is unavailable".to_owned())?
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.lock().clear_selection();
+    publish(&app);
+    Ok(())
 }
 #[tauri::command]
 fn load_text(app: tauri::AppHandle, state: State<'_, Runtime>, text: String) -> Result<(), String> {
@@ -493,6 +522,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             snapshot,
             load_text,
+            load_entry,
             set_clipboard,
             save_text,
             save_current,

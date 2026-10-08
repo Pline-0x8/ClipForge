@@ -7,6 +7,24 @@
   let settingsSaving=null,settingsOriginal=null;
   async function command(name,args={}) {try{return await invoke(name,args);}catch(error){$('status').textContent=String(error);}}
   const summary=text=>text.split(/\r?\n/).slice(0,2).map(line=>Array.from(line).slice(0,140).join('')).join('\n')||'(Empty text)';
+  const historyItems=snapshot=>snapshot.historyEntries??snapshot.history.map(text=>({kind:'text',text}));
+  function contentPreview(host,entry){
+    host.replaceChildren();
+    if(entry.thumbnail?.startsWith('data:image/png;base64,')){const image=document.createElement('img');image.className='clipboard-thumbnail';image.src=entry.thumbnail;image.alt=entry.label;host.append(image);}
+    const label=document.createElement('span');label.className='content-label';label.textContent=entry.label;host.append(label);
+    const detail=document.createElement('span');detail.className='content-detail';detail.textContent=entry.detail;host.append(detail);
+    if(entry.table?.length){const table=document.createElement('table');table.className='clipboard-table';entry.table.forEach(cells=>{const tr=document.createElement('tr');cells.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);});table.append(tr);});host.append(table);}
+  }
+  async function showDetails(entry){
+    if(!(await saveEditor()))return;
+    await command('begin_edit');
+    $('content-title').textContent=entry.label;
+    contentPreview($('content-summary'),entry);
+    $('content-formats').textContent=(entry.formats||[]).join('\n');
+    $('content-hex').textContent=entry.hex?`First bytes: ${entry.hex}`:'';
+    $('content-dialog').showModal();
+  }
+  function closeDetails(){$('content-dialog').close();return command('end_edit');}
   function refresh(){if(outsidePointer)return;if(pending&&!editor&&!dragging){const next=pending;pending=null;lastContent='';render(next);}else if(state&&!editor&&!dragging){lastContent='';render(state);}}
   function finishEditor(){if(!editor)return;editor=null;command('end_edit');refresh();}
   async function saveEditor(){
@@ -29,7 +47,7 @@
     })();
     try{return await saving;}finally{saving=null;}
   }
-  async function action(name,args={}){if(await saveEditor()&&await saveSettings())return command(name,args);}
+  async function action(name,args={}){if(await saveEditor()&&await saveSettings()){if($('content-dialog').open)await closeDetails();return command(name,args);}}
   async function openEditor(register,host){
     if(editor?.register===register)return;
     if(!(await saveEditor()))return;
@@ -68,12 +86,15 @@
     state=snapshot;
     $('status').textContent=snapshot.status||'Ready';
     $('menu-shortcut').textContent=snapshot.hotkeys?.menu||defaults.menu;
-    $('mode').textContent=snapshot.copy?'Choose a register to save into':'Choose clipboard text';
-    $('hint').textContent=snapshot.copy?'Press a letter to save the copied selection.':'Click a cell to edit. Click elsewhere to save. Drag history to a cell.';
+    $('mode').textContent=snapshot.copy?'Choose a register to save into':'Choose clipboard content';
+    $('hint').textContent=snapshot.copy?'Press a letter to save the copied selection.':'Click history to copy. Edit registers or drag text into a letter.';
     if(editor||dragging||opening||outsidePointer){pending=snapshot;return;}
-    $('current-preview').textContent=snapshot.currentClipboard==null?'No text on clipboard':summary(snapshot.currentClipboard);
-    $('current-clipboard').draggable=snapshot.currentClipboard!=null;
-    const signature=JSON.stringify([snapshot.registers,snapshot.registerNames,snapshot.history]);
+    if(snapshot.currentEntry)contentPreview($('current-preview'),snapshot.currentEntry);
+    else $('current-preview').textContent=snapshot.currentClipboard==null?'No supported content on clipboard':summary(snapshot.currentClipboard);
+    $('current-clipboard').classList.toggle('rich-current',!!snapshot.currentEntry);
+    $('current-clipboard').draggable=!snapshot.currentEntry&&snapshot.currentClipboard!=null;
+    const entries=historyItems(snapshot);
+    const signature=JSON.stringify([snapshot.registers,snapshot.registerNames,entries]);
     if(signature!==lastContent){
       lastContent=signature;$('registers').replaceChildren();
       snapshot.registers.map((text,index)=>({text,index})).sort((a,b)=>Number(b.text!==null)-Number(a.text!==null)||a.index-b.index).forEach(({text,index})=>{
@@ -88,12 +109,21 @@
         dropTarget(container,text=>action('save_text',{register:letter,text}));$('registers').append(container);
       });
       $('history').replaceChildren();
-      snapshot.history.forEach((text,index)=>{
+      entries.forEach((entry,index)=>{
+        if(entry.kind!=='text'){
+          const container=document.createElement('div');container.className='row rich-row';container.setAttribute('role','listitem');container.dataset.selection=String(snapshot.registers.filter(value=>value!==null).length+index);
+          const load=document.createElement('button');load.className='rich-load';load.setAttribute('aria-label',`Copy ${entry.label}`);
+          const icon=document.createElement('span');icon.className='key';icon.textContent={files:'FILE',image:'IMG',table:'GRID',binary:'BIN'}[entry.kind]||'DATA';
+          const preview=document.createElement('span');preview.className='rich-preview';contentPreview(preview,entry);load.append(icon,preview);load.addEventListener('click',()=>action('load_entry',{id:entry.id}));
+          const details=document.createElement('button');details.className='row-action';details.textContent='Details';details.setAttribute('aria-label',`Details for ${entry.label}`);details.addEventListener('click',()=>showDetails(entry));
+          container.append(load,details);$('history').append(container);return;
+        }
+        const text=entry.text;
         const button=row(text,String(index+1).padStart(2,'0'));button.classList.add('history-row');button.draggable=true;button.dataset.selection=String(snapshot.registers.filter(value=>value!==null).length+index);
         button.addEventListener('click',()=>action('set_clipboard',{text}));dragSource(button,()=>text);$('history').append(button);
       });
-      if(!snapshot.history.length){const empty=document.createElement('div');empty.className='empty-state';empty.textContent='Your next copy starts the ring. Recent text will appear here.';$('history').append(empty);}
-      $('count').textContent=`${snapshot.history.length} items`;
+      if(!entries.length){const empty=document.createElement('div');empty.className='empty-state';empty.textContent='Your next copy starts the ring. Recent clipboard content will appear here.';$('history').append(empty);}
+      $('count').textContent=`${entries.length} items`;
     }
     document.querySelectorAll('.row').forEach(button=>{const selected=snapshot.selection!==null&&Number(button.dataset.selection??-1)===snapshot.selection;button.classList.toggle('selected',selected);if(selected&&snapshot.selection!==lastSelection)button.scrollIntoView({block:'nearest'});});lastSelection=snapshot.selection;
   }
@@ -164,7 +194,9 @@
   $('settings-cancel').onclick=closeSettings;
   $('settings-dialog').addEventListener('cancel',event=>{event.preventDefault();return closeSettings();});
   $('settings-form').onsubmit=event=>{event.preventDefault();return saveSettings(true);};
-  $('current-clipboard').addEventListener('click',event=>{if(editor?.register===null&&editor.box.contains(event.target))return;return openEditor(null,$('current-preview'));});
+  $('content-close').onclick=closeDetails;
+  $('content-dialog').addEventListener('cancel',event=>{event.preventDefault();return closeDetails();});
+  $('current-clipboard').addEventListener('click',event=>{if(state?.currentEntry)return showDetails(state.currentEntry);if(editor?.register===null&&editor.box.contains(event.target))return;return openEditor(null,$('current-preview'));});
   dropTarget($('current-clipboard'),text=>action('set_clipboard',{text}));dragSource($('current-clipboard'),()=>state?.currentClipboard);
   document.addEventListener('pointerdown',event=>{if(editor&&!editor.box.contains(event.target)){outsidePointer=true;saveEditor();}});
   document.addEventListener('click',()=>{if(outsidePointer){outsidePointer=false;setTimeout(refresh,0);}});
@@ -173,10 +205,10 @@
   function cancelSave(){ $('save-dialog').close();command('end_edit'); }
   $('cancel-save').onclick=cancelSave;$('save-dialog').addEventListener('cancel',event=>{event.preventDefault();cancelSave();});
   $('save-form').onsubmit=async event=>{event.preventDefault();const register=$('save-letter').value.toLowerCase();if(/^[a-z]$/.test(register)){try{await invoke('save_current',{register});cancelSave();}catch(error){$('save-error').textContent=String(error);}}};
-  function cancelEdit(){if(saving)return;if(editor){finishEditor();}else if($('settings-dialog').open)closeSettings();else if($('save-dialog').open)cancelSave();}
+  function cancelEdit(){if(saving)return;if(editor){finishEditor();}else if($('settings-dialog').open)closeSettings();else if($('save-dialog').open)cancelSave();else if($('content-dialog').open)closeDetails();}
   document.addEventListener('keydown',event=>{
     if(editor){if(event.key==='Escape'){event.preventDefault();cancelEdit();}return;}
-    if($('settings-dialog').open||$('save-dialog').open||event.target.matches('input,textarea'))return;
+    if($('settings-dialog').open||$('save-dialog').open||$('content-dialog').open||event.target.matches('input,textarea'))return;
     if(event.key==='Escape'){event.preventDefault();command('dismiss',{commit:false});}
     else if(event.key==='Enter'){event.preventDefault();action('dismiss',{commit:true});}
     else if(['Tab','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();command('navigate',{backwards:event.shiftKey||['ArrowUp','ArrowLeft'].includes(event.key)});}

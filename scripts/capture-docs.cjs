@@ -57,11 +57,21 @@ async function main() {
       demo.registerNames[10] = 'Run tests';
       demo.registers[23] = 'ssh dev@lab-host\\nConnect to the development VM';
       demo.registerNames[23] = 'Development VM';
+      const sample = document.createElement('canvas'); sample.width=640; sample.height=360;
+      const ctx=sample.getContext('2d');ctx.fillStyle='#15283c';ctx.fillRect(0,0,640,360);
+      ctx.fillStyle='#82e1c4';ctx.font='bold 34px sans-serif';ctx.fillText('Quarterly results',35,55);
+      [120,180,230,270].forEach((height,index)=>{ctx.fillStyle=['#438b96','#4aa7a0','#66c6ad','#82e1c4'][index];ctx.fillRect(50+index*140,320-height,85,height);});
+      const image={id:101,kind:'image',label:'Image · 640 × 360',detail:'Quarterly chart · PNG',thumbnail:sample.toDataURL('image/png'),text:null,table:[],formats:['PNG'],hex:'89 50 4E 47 0D 0A 1A 0A'};
+      const table={id:102,kind:'table',label:'Spreadsheet cells',detail:'2 rows · Workbook formats retained',text:'Team\\tTotal\\nDesign\\t42',table:[['Team','Total'],['Design','42']],thumbnail:null,formats:['Unicode text','Biff8','HTML Format'],hex:'09 08 10 00'};
+      const files={id:103,kind:'files',label:'budget.xlsx + 1 files',detail:'XLSX / PDF · File references',text:null,table:[],thumbnail:null,formats:['Files (HDROP)','C:\\\\Samples\\\\budget.xlsx','C:\\\\Samples\\\\report.pdf'],hex:'14 00 00 00'};
+      const binary={id:104,kind:'binary',label:'Binary data · 24 KB',detail:'Custom application format',text:null,table:[],thumbnail:null,formats:['Sample binary payload'],hex:'DE AD BE EF 00 01 02 03'};
+      demo.historyEntries=[image,table,files,binary,...demo.history.map((text,index)=>({id:105+index,kind:'text',text}))];
       const listeners = {};
       window.__TAURI__ = {
         core: { invoke: async (name, args = {}) => {
           if (name === 'snapshot') return structuredClone(demo);
-          if (name === 'set_clipboard') { demo.currentClipboard = args.text; listeners['clipforge-state']?.({ payload: structuredClone(demo) }); }
+          if (name === 'set_clipboard') { demo.currentClipboard = args.text;demo.currentEntry=null; listeners['clipforge-state']?.({ payload: structuredClone(demo) }); }
+          if (name === 'load_entry') { demo.currentEntry=demo.historyEntries.find(entry=>entry.id===args.id);demo.currentClipboard=demo.currentEntry.text; listeners['clipforge-state']?.({ payload: structuredClone(demo) }); }
           return null;
         } },
         event: { listen: async (name, callback) => { listeners[name] = callback; return () => {}; } }
@@ -107,6 +117,13 @@ async function main() {
     }
     await evaluate(`document.querySelector('.inline-text').value = 'ssh dev@lab-host\\ncd ~/projects/clipforge'; document.querySelector('.inline-text').blur(); document.querySelector('.inline-editor').scrollIntoView({block: 'nearest'})`);
     await capture('register-edit.png');
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); document.querySelectorAll('.rich-row .row-action')[3].click()`);
+    for (let attempt=0;attempt<100;attempt++) {
+      if(await evaluate(`document.getElementById('content-dialog').open`))break;
+      await new Promise(resolve=>setTimeout(resolve,50));
+      if(attempt===99)throw new Error('Binary details did not open');
+    }
+    await capture('binary-details.png');
     await send('Browser.close');
   } finally {
     socket?.close();

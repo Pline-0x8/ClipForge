@@ -15,6 +15,7 @@ cargo run --locked -- --smoke-background
 cargo test --test windows_smoke real_clipboard_register_ring_and_clear -- --ignored --test-threads=1
 cargo test --test windows_smoke saving_history_text_to_register_preserves_exact_text_and_host_clipboard -- --ignored --test-threads=1
 cargo test --locked --test windows_smoke clearing_ -- --ignored --test-threads=1
+cargo test --locked --test rich_windows -- --ignored --test-threads=1
 ```
 
 The desktop tests temporarily replace clipboard text, and the keyboard fixture changes focus. Only previous plain text is restored. See [TESTING.md](../TESTING.md) for validated checks and remaining limitations.
@@ -49,4 +50,4 @@ auto-clean-frequency = "1 day"
 
 Stable Cargo does not provide a command to clear all downloaded dependencies. Manual global cache cleanup and custom eviction ages currently require nightly Cargo; see the [Cargo cache cleanup documentation](https://doc.rust-lang.org/cargo/reference/unstable.html#gc). Do not delete the entire user `.cargo` directory: it also contains installed executables, configuration, and credentials.
 
-`src/core.rs` owns storage, `src/input.rs` models Windows shortcuts, `src/platform` handles OS integration and transactional shortcut updates, `src/settings.rs` validates/persists hotkeys, `src/service.rs` serializes clipboard operations, and `src/picker.rs` owns selection state. `src/main.rs` hosts Tauri, the tray, and a small command bridge. `ui` contains the static frontend. Clipboard operations run off the UI thread; snapshots update the webview through Tauri events. The frontend renders clipboard contents with textContent and never interprets them as HTML.
+`src/core.rs` owns text registers and mixed history, `src/content.rs` builds typed previews, and `src/content_windows.rs` captures/restores memory-backed native formats. Native payloads use shared references and remain in Rust; frontend snapshots contain preview metadata and session entry IDs. Image decoding is bounded and produces small PNG thumbnails. A dedicated hidden owner window pumps Windows clipboard messages. `src/input.rs` models Windows shortcuts, `src/platform` handles OS integration and transactional shortcut updates, `src/settings.rs` validates/persists hotkeys, `src/service.rs` serializes clipboard operations, and `src/picker.rs` owns selection state. `src/main.rs` hosts Tauri, the tray, and a small command bridge. `ui` contains the static frontend. Clipboard operations run off the UI thread; snapshots update the webview through Tauri events. The frontend renders clipboard text with textContent and never interprets it as HTML; thumbnail URLs must be inline PNG data.

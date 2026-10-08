@@ -89,5 +89,17 @@ const setHotkey=(action,shortcut)=>{const parts=shortcut.split('+');for(const [i
  await $('clear-registers').onclick();assert.deepEqual(calls.slice(-3).map(call=>call.name),['edit_register','end_edit','clear_registers']);
  handlers['clipforge-state']({payload:{...state,registers:Array(26).fill(null),registerNames:Array(26).fill('')}});assert.equal($('history').children.length,state.history.length);assert.equal($('current-preview').textContent,state.currentClipboard);
  await $('clear').onclick();assert.equal(calls.at(-1).name,'clear_all');
- console.log('PASS: inline edits, autosave, focus loss, validation retention, history, drag/drop, settings, tray quit, separate history and register clearing');
+ const binary={id:91,kind:'binary',label:'Binary data · 1 KB',detail:'1 format',text:null,formats:['Custom fixture'],hex:'DE AD BE EF',table:[],thumbnail:null};
+ const table={...binary,id:92,kind:'table',label:'Spreadsheet cells',text:'Item\tTotal\nTeam\t42',table:[['Item','Total'],['Team','42']]};
+ handlers['clipforge-state']({payload:{...state,historyEntries:[binary,table],currentEntry:binary}});
+ assert.equal($('count').textContent,'2 items');assert.equal($('history').children[0].children[0].children[1].children[0].textContent,binary.label);
+ await $('history').children[0].children[0].listeners.click();assert.equal(calls.at(-1).name,'load_entry');assert.equal(calls.at(-1).args.id,91);
+ await $('history').children[0].children[1].listeners.click();assert.equal($('content-dialog').open,true);assert.equal($('content-formats').textContent,'Custom fixture');assert.ok($('content-hex').textContent.includes('DE AD BE EF'));
+ await $('content-close').onclick();assert.equal($('content-dialog').open,false);assert.equal(calls.at(-1).name,'end_edit');
+ assert.equal($('history').children[1].children[0].children[1].children.at(-1).children[1].children[1].textContent,'42');
+ assert.equal($('current-clipboard').draggable,false,'binary previews cannot be dragged into text registers');
+ await $('current-clipboard').listeners.click({target:$('current-preview')});assert.equal($('content-dialog').open,true);await handlers['clipforge-toggle']();assert.equal($('content-dialog').open,false);
+ const unsafe={...binary,label:'<img src=x onerror=alert(1)>',thumbnail:'https://example.invalid/track.png'};
+ handlers['clipforge-state']({payload:{...state,historyEntries:[unsafe],currentEntry:null}});assert.equal($('history').children[0].children[0].children[1].children[0].textContent,unsafe.label);assert.equal($('history').children[0].children[0].children[1].children.length,2,'remote thumbnail URLs are never rendered');
+ console.log('PASS: edits, autosave, focus, validation, text drag/drop, settings, clearing, typed history restore, table previews, binary details, and safe rendering');
 })().catch(error=>{console.error(error);process.exitCode=1;});

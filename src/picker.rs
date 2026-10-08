@@ -5,6 +5,8 @@ use serde::Serialize;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    pub history_entries: Vec<crate::content::EntryView>,
+    pub current_entry: Option<crate::content::EntryView>,
     pub hotkeys: crate::settings::Hotkeys,
     pub registers: Vec<Option<String>>,
     pub register_names: Vec<String>,
@@ -17,6 +19,7 @@ pub struct Snapshot {
 }
 
 pub struct Picker {
+    pub current_entry: Option<crate::content::EntryView>,
     pub hotkeys: crate::settings::Hotkeys,
     pub engine: Engine,
     pub current_clipboard: Option<String>,
@@ -26,11 +29,17 @@ pub struct Picker {
     pub target: usize,
     pub pinned: bool,
     pub selection: Option<usize>,
-    navigation: Vec<String>,
+    navigation: Vec<Target>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Text(String),
+    Entry(u64),
 }
 impl Picker {
     pub fn new(target: usize) -> Self {
         Self {
+            current_entry: None,
             hotkeys: crate::settings::Hotkeys::default(),
             engine: Engine::default(),
             current_clipboard: None,
@@ -45,6 +54,13 @@ impl Picker {
     }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
+            history_entries: self
+                .engine
+                .entries()
+                .iter()
+                .map(|entry| entry.view.clone())
+                .collect(),
+            current_entry: self.current_entry.clone(),
             hotkeys: self.hotkeys.clone(),
             registers: self.engine.registers().to_vec(),
             register_names: self.engine.register_names().to_vec(),
@@ -70,7 +86,14 @@ impl Picker {
             .registers()
             .iter()
             .filter_map(Clone::clone)
-            .chain(self.engine.history().iter().cloned())
+            .map(Target::Text)
+            .chain(self.engine.entries().iter().map(|entry| {
+                if entry.content.is_some() {
+                    Target::Entry(entry.view.id)
+                } else {
+                    Target::Text(entry.view.text.clone().unwrap_or_default())
+                }
+            }))
             .collect();
     }
     pub fn pin_editor(&mut self) {
@@ -104,6 +127,12 @@ impl Picker {
         });
     }
     pub fn dismiss(&mut self, commit: bool) -> Option<String> {
+        match self.dismiss_target(commit) {
+            Some(Target::Text(text)) => Some(text),
+            _ => None,
+        }
+    }
+    pub fn dismiss_target(&mut self, commit: bool) -> Option<Target> {
         let text = if commit {
             self.selection.and_then(|i| self.navigation.get(i)).cloned()
         } else {
@@ -124,6 +153,32 @@ impl Picker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mixed_keyboard_selection_restores_entry_id_and_eviction_cancels_selection() {
+        use crate::content::{Format, describe};
+        let mut picker = Picker::new(0);
+        let content = describe(vec![Format {
+            id: 49152,
+            name: "Binary".into(),
+            bytes: vec![1, 2, 3],
+        }]);
+        picker.engine.observe_content(content.clone());
+        let id = picker.engine.entries()[0].view.id;
+        picker.show(false, 0);
+        picker.navigate(false);
+        let mut engine = picker.engine.clone();
+        engine.observe("new text");
+        picker.refresh(engine);
+        assert_eq!(picker.selection, Some(1));
+        assert_eq!(picker.dismiss_target(true), Some(Target::Entry(id)));
+        picker.show(false, 0);
+        picker.navigate(true);
+        let mut engine = picker.engine.clone();
+        engine.clear_history();
+        picker.refresh(engine);
+        assert_eq!(picker.selection, None);
+        assert_eq!(picker.dismiss_target(true), None);
+    }
     #[test]
     fn editor_survives_modifier_release_and_never_commits_a_prior_selection() {
         let mut p = Picker::new(42);

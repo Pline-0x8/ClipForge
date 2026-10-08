@@ -360,8 +360,10 @@ name = "clipforge"
 version = "0.1.0-beta.1"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "enigo",
  "global-hotkey",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tauri",

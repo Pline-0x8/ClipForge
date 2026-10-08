@@ -22,6 +22,8 @@ impl std::error::Error for RegisterError {}
 
 #[derive(Debug, Clone)]
 pub struct Engine {
+    entries: Vec<crate::content::Entry>,
+    next_entry_id: u64,
     registers: [Option<String>; REGISTER_COUNT],
     register_names: [String; REGISTER_COUNT],
     history: Vec<String>,
@@ -37,6 +39,8 @@ impl Default for Engine {
 impl Engine {
     pub fn new(history_limit: usize) -> Self {
         Self {
+            entries: Vec::new(),
+            next_entry_id: 1,
             registers: std::array::from_fn(|_| None),
             register_names: std::array::from_fn(|_| String::new()),
             history: Vec::new(),
@@ -87,12 +91,82 @@ impl Engine {
         if text.is_empty() || self.history_limit == 0 {
             return;
         }
-        if self.history.first().is_some_and(|first| first == text) {
+        if self.entries.first().is_some_and(|first| {
+            first.content.is_none() && first.view.text.as_deref() == Some(text)
+        }) {
             return;
         }
-        self.history.retain(|entry| entry != text);
-        self.history.insert(0, text.to_owned());
-        self.history.truncate(self.history_limit);
+        self.entries
+            .retain(|entry| entry.content.is_some() || entry.view.text.as_deref() != Some(text));
+        self.push_entry(crate::content::Entry {
+            view: crate::content::EntryView::text(text),
+            content: None,
+        });
+    }
+
+    fn push_entry(&mut self, mut entry: crate::content::Entry) {
+        if entry.view.id == 0 {
+            entry.view.id = self.next_entry_id;
+            self.next_entry_id += 1;
+        }
+        self.entries.insert(0, entry);
+        self.entries.truncate(self.history_limit);
+        while self
+            .entries
+            .iter()
+            .map(crate::content::Entry::bytes)
+            .sum::<usize>()
+            > crate::content::MAX_HISTORY_BYTES
+        {
+            self.entries.pop();
+        }
+        self.history = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.view.text.clone())
+            .fold(Vec::new(), |mut history, text| {
+                if !history.contains(&text) {
+                    history.push(text);
+                }
+                history
+            });
+    }
+
+    pub fn observe_content(&mut self, content: crate::content::Content) {
+        if self.history_limit == 0 {
+            return;
+        }
+        if content
+            .formats
+            .iter()
+            .map(|format| format.bytes.len())
+            .sum::<usize>()
+            > crate::content::MAX_ENTRY_BYTES
+        {
+            return;
+        }
+        if let Some(index) = self.entries.iter().position(|entry| {
+            entry
+                .content
+                .as_ref()
+                .is_some_and(|old| old.formats == content.formats)
+        }) {
+            let entry = self.entries.remove(index);
+            self.push_entry(entry);
+            return;
+        }
+        self.push_entry(crate::content::Entry {
+            view: content.view.clone(),
+            content: Some(std::sync::Arc::new(content)),
+        });
+    }
+
+    pub fn entries(&self) -> &[crate::content::Entry] {
+        &self.entries
+    }
+
+    pub fn entry(&self, id: u64) -> Option<&crate::content::Entry> {
+        self.entries.iter().find(|entry| entry.view.id == id)
     }
 
     pub fn history(&self) -> &[String] {
@@ -111,6 +185,7 @@ impl Engine {
     /// Clear recent copies while retaining register contents and labels.
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.entries.clear();
     }
 
     /// Clear all register contents and labels while retaining recent copies.
@@ -157,6 +232,33 @@ pub fn preview(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_history_is_bounded_deduplicated_and_cleared_without_register_loss() {
+        use crate::content::{Format, describe};
+        let binary = describe(vec![Format {
+            id: 49152,
+            name: "Fixture".into(),
+            bytes: vec![0xde, 0xad],
+        }]);
+        let mut engine = Engine::new(2);
+        engine.edit_register('a', "Keep", "register").unwrap();
+        engine.observe_content(binary.clone());
+        let id = engine.entries()[0].view.id;
+        engine.observe("new text");
+        assert_eq!(engine.entries().len(), 2);
+        engine.observe_content(binary);
+        assert_eq!(engine.entries().len(), 2);
+        assert_eq!(engine.entries()[0].view.id, id);
+        engine.observe("newest");
+        assert_eq!(engine.history(), ["newest"]);
+        assert!(engine.entry(id).is_some());
+        engine.observe("evict");
+        assert!(engine.entry(id).is_none());
+        engine.clear_history();
+        assert!(engine.entries().is_empty());
+        assert_eq!(engine.registers()[0].as_deref(), Some("register"));
+    }
 
     #[test]
     fn clearing_registers_preserves_history_and_allows_reuse() {

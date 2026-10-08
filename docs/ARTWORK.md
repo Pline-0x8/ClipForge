@@ -26,6 +26,10 @@ and `ui/app.js` in headless Chrome at the configured 840 × 650 window size and
 frontend usage; they do not validate native WebView rendering, clipboard access,
 focus restoration, or keyboard injection.
 
-Run `node scripts/capture-docs.cjs` to refresh both README screenshots. The script
+Run `node scripts/capture-docs.cjs` to refresh all three README screenshots. The script
 also checks that the clear controls fit at the 650 px minimum window width and
 the default 840 px width. Set `CLIPFORGE_CHROME` if Chrome is installed elsewhere.
+
+The sample history includes a canvas-generated chart image, a spreadsheet table,
+an XLSX/PDF file list, and an unknown binary entry. A third capture shows binary
+details. These are frontend demo fixtures, not captured user clipboard data.
